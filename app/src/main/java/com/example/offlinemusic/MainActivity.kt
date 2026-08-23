@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
     } }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun MusicApp(viewModel: PlayerViewModel, onImport: () -> Unit, onDownload: (String) -> Unit) {
     val songs by viewModel.songs.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
@@ -56,7 +58,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun DownloadDialog(onDismiss: () -> Unit, onDownload: (String) -> Unit) { var url by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, title = { Text("Download audio") }, text = { OutlinedTextField(url, { url = it }, label = { Text("Direct audio URL") }, singleLine = true) }, confirmButton = { TextButton(onClick = { onDownload(url) }, enabled = url.startsWith("http")) { Text("Download") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }) }
+@Composable private fun DownloadDialog(onDismiss: () -> Unit, onDownload: (String) -> Unit) { var url by remember { mutableStateOf("") }; AlertDialog(onDismissRequest = onDismiss, title = { Text("Download audio") }, text = { OutlinedTextField(url, { url = it }, label = { Text("Audio or YouTube URL") }, singleLine = true) }, confirmButton = { TextButton(onClick = { onDownload(url) }, enabled = url.startsWith("http")) { Text("Download") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }) }
 
 @Composable private fun EmptyLibrary(onImport: () -> Unit) = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.LibraryMusic, null, Modifier.size(56.dp)); Spacer(Modifier.height(12.dp)); Text("Your private library is empty"); Text("Import an audio file to listen offline", style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.height(16.dp)); Button(onClick = onImport) { Text("Import audio") } } }
 

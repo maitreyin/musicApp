@@ -4,8 +4,15 @@ import android.app.Application
 import androidx.room.Room
 import com.example.offlinemusic.data.SongDatabase
 import com.example.offlinemusic.data.SongRepository
+import com.example.offlinemusic.data.NewPipeHttpDownloader
+import org.schabi.newpipe.extractor.NewPipe
 
 class MusicApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        NewPipe.init(NewPipeHttpDownloader())
+    }
+
     val repository: SongRepository by lazy {
         val database = Room.databaseBuilder(this, SongDatabase::class.java, "music.db").build()
         SongRepository(this, database.songDao())
