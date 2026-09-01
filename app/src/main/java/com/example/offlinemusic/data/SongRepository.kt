@@ -28,12 +28,26 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
 
     /** Downloads a direct audio URL or resolves a YouTube URL into an audio stream. */
     suspend fun download(url: String): Song = withContext(Dispatchers.IO) {
-        val source = if (isYouTubeUrl(url)) resolveYouTube(url) else DownloadSource(url)
-        val input = openConnection(source.audioUrl).inputStream
         try {
-            importStream(input, source.metadata)
-        } finally {
-            input.close()
+            val source = if (isYouTubeUrl(url)) {
+                try {
+                    resolveYouTube(url)
+                } catch (e: Exception) {
+                    android.util.Log.e("SongRepository", "Failed to resolve YouTube URL: $url", e)
+                    throw Exception("Failed to resolve YouTube URL: ${e.message ?: e.javaClass.simpleName}", e)
+                }
+            } else {
+                DownloadSource(url)
+            }
+            val input = openConnection(source.audioUrl).inputStream
+            try {
+                importStream(input, source.metadata)
+            } finally {
+                input.close()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SongRepository", "Download failed for URL: $url", e)
+            throw e
         }
     }
 
@@ -60,6 +74,8 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
                             }
                         }.absolutePath
                     }
+                }.onFailure { e ->
+                    android.util.Log.w("SongRepository", "Failed to download artwork from: $artworkUrl", e)
                 }.getOrNull()
             }
             Song(
@@ -71,23 +87,106 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
                 localPath = output.absolutePath,
                 artworkPath = artwork
             ).also { dao.upsert(it); meta.release() }
-        } catch (error: Exception) { output.delete(); downloadedArtwork?.delete(); throw error }
+        } catch (error: Exception) {
+            android.util.Log.e("SongRepository", "Failed to import stream, cleaning up files", error)
+            output.delete(); downloadedArtwork?.delete(); throw error
+        }
     }
 
     private fun resolveYouTube(url: String): DownloadSource {
-        val extractor = NewPipe.getServiceByUrl(url).getStreamExtractor(url)
-        extractor.fetchPage()
-        val audioStream = extractor.audioStreams.maxByOrNull { it.bitrate }
-            ?: error("No downloadable audio stream is available for this video")
-        return DownloadSource(
-            audioUrl = audioStream.url ?: error("The selected audio stream has no download URL"),
-            metadata = DownloadMetadata(
-                title = extractor.name,
-                artist = extractor.uploaderName,
-                durationMs = extractor.length * 1_000,
-                artworkUrl = extractor.thumbnails.lastOrNull()?.url
+        try {
+            val extractor = NewPipe.getServiceByUrl(url).getStreamExtractor(url)
+            extractor.fetchPage()
+            
+            // Log extraction details
+            android.util.Log.d("SongRepository", "=== YouTube Extraction Start ===")
+            android.util.Log.d("SongRepository", "URL: $url")
+            android.util.Log.d("SongRepository", "Video: ${extractor.name}")
+            android.util.Log.d("SongRepository", "Uploader: ${extractor.uploaderName}")
+            android.util.Log.d("SongRepository", "Duration: ${extractor.length}s")
+            
+            // Attempt 1: Try standard audio streams
+            val audioStreams = try {
+                extractor.audioStreams
+            } catch (e: Exception) {
+                android.util.Log.w("SongRepository", "Exception getting audioStreams: ${e.message}")
+                null
+            } ?: emptyList()
+            
+            android.util.Log.d("SongRepository", "Audio streams: ${audioStreams.size}")
+            
+            // Select the best audio stream by bitrate
+            var selectedStream = audioStreams.maxByOrNull { it.bitrate }
+            
+            if (selectedStream != null) {
+                val streamUrl = selectedStream.url
+                if (streamUrl != null) {
+                    android.util.Log.d("SongRepository", "Selected audio stream, bitrate: ${selectedStream.bitrate}")
+                    android.util.Log.d("SongRepository", "=== YouTube Extraction Success ===")
+                    
+                    return DownloadSource(
+                        audioUrl = streamUrl,
+                        metadata = DownloadMetadata(
+                            title = extractor.name,
+                            artist = extractor.uploaderName,
+                            durationMs = extractor.length * 1_000,
+                            artworkUrl = extractor.thumbnails.lastOrNull()?.url
+                        )
+                    )
+                }
+            }
+            
+            // Fallback: Try video streams (they usually include audio)
+            android.util.Log.d("SongRepository", "No audio streams found, trying video streams as fallback...")
+            val videoStreams = try {
+                extractor.videoStreams
+            } catch (e: Exception) {
+                android.util.Log.w("SongRepository", "Exception getting videoStreams: ${e.message}")
+                null
+            } ?: emptyList()
+            
+            android.util.Log.d("SongRepository", "Video streams: ${videoStreams.size}")
+            
+            // Try to find the best video stream
+            val videoStream = videoStreams.maxByOrNull { it.bitrate }
+            if (videoStream != null) {
+                val streamUrl = videoStream.url
+                if (streamUrl != null) {
+                    android.util.Log.d("SongRepository", "Falling back to video stream, bitrate: ${videoStream.bitrate}")
+                    android.util.Log.d("SongRepository", "=== YouTube Extraction Success (Video Fallback) ===")
+                    
+                    return DownloadSource(
+                        audioUrl = streamUrl,
+                        metadata = DownloadMetadata(
+                            title = extractor.name,
+                            artist = extractor.uploaderName,
+                            durationMs = extractor.length * 1_000,
+                            artworkUrl = extractor.thumbnails.lastOrNull()?.url
+                        )
+                    )
+                }
+            }
+            
+            // No streams found at all
+            android.util.Log.e("SongRepository", "=== YouTube Extraction Failed: No streams available ===")
+            android.util.Log.e("SongRepository", "Audio streams count: ${audioStreams.size}, Video streams count: ${videoStreams.size}")
+            
+            throw Exception(
+                "No audio or video streams could be extracted from this YouTube video.\n\n" +
+                "This may occur if:\n" +
+                "• The video is age-restricted or requires authentication\n" +
+                "• The video is private, deleted, or unavailable in your region\n" +
+                "• The video is from YouTube Music Premium with DRM protection\n" +
+                "• YouTube has blocked automated downloading for this content\n\n" +
+                "Try using a different video or a direct audio file URL."
             )
-        )
+        } catch (e: Exception) {
+            android.util.Log.e("SongRepository", "YouTube extraction exception: ${e.javaClass.simpleName}: ${e.message}", e)
+            if (e.message?.startsWith("No audio or video streams") == true) {
+                throw e  // Re-throw our custom error messages
+            }
+            throw Exception("Failed to extract audio from YouTube: ${e.message}", e)
+        }
     }
 
     private fun openConnection(url: String): HttpURLConnection =

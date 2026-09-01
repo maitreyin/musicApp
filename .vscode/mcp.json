@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"my-mcp-server-dbacf604": {
+			"url": "https://mcp.supabase.com/mcp?project_ref=nucuxbfwwrtpwbjcoybr&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}

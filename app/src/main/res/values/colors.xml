@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Brand Colors -->
+    <color name="primary_pink">#E91E63</color>
+    <color name="primary_purple">#9C27B0</color>
+    <color name="primary_light">#F06EBE</color>
+    
+    <!-- Background Colors -->
+    <color name="surface_light">#F5F5F5</color>
+    <color name="surface_white">#FFFFFF</color>
+    <color name="surface_dark">#1A1A1A</color>
+    
+    <!-- Accent Colors -->
+    <color name="accent_pink">#EC407A</color>
+    <color name="accent_purple">#AB47BC</color>
+    
+    <!-- Text Colors -->
+    <color name="text_primary">#212121</color>
+    <color name="text_secondary">#757575</color>
+    <color name="text_tertiary">#BDBDBD</color>
+    <color name="text_white">#FFFFFF</color>
+</resources>
