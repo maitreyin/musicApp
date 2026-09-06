@@ -14,11 +14,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -31,6 +34,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,9 +91,9 @@ class MainActivity : ComponentActivity() {
 object AppColors {
     val Midnight = Color(0xFF0B1020)
     val Surface = Color(0xFF101827)
-    val SurfaceElevated = Color(0xFF1A2433)
-    val Panel = Color(0xFF202B3D)
-    val PanelStrong = Color(0xFF243145)
+    val SurfaceElevated = Color(0xFF172235)
+    val Panel = Color(0xFF1D2B40)
+    val PanelStrong = Color(0xFF263A52)
     val Border = Color(0xFF2F3F56)
     val Accent = Color(0xFF67E8F9)
     val AccentStrong = Color(0xFF38BDF8)
@@ -112,6 +117,21 @@ fun MusicTheme(content: @Composable () -> Unit) {
             onSecondary = AppColors.Midnight,
             onBackground = AppColors.TextPrimary,
             onSurface = AppColors.TextPrimary
+        ),
+        typography = Typography(
+            displaySmall = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold),
+            headlineSmall = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold),
+            titleLarge = TextStyle(fontWeight = FontWeight.SemiBold),
+            titleMedium = TextStyle(fontWeight = FontWeight.SemiBold),
+            bodyLarge = TextStyle(fontWeight = FontWeight.Medium),
+            labelLarge = TextStyle(fontWeight = FontWeight.SemiBold)
+        ),
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(8.dp),
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(16.dp),
+            large = RoundedCornerShape(22.dp),
+            extraLarge = RoundedCornerShape(28.dp)
         )
     ) {
         content()
@@ -134,6 +154,7 @@ fun MusicApp(
     val authState by authManager.authState.collectAsStateWithLifecycle()
     val profileState by authManager.profileState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleScope = (context as? ComponentActivity)?.lifecycleScope
     val startupScreen = if (authState.signedIn) Screen.PROFILE else Screen.AUTH
 
     LaunchedEffect(Unit) {
@@ -334,8 +355,8 @@ fun MusicApp(
                     authState = authState,
                     profileState = profileState,
                     onSearchClick = { showSearch = true },
-                    onLoadProfile = { scope?.launch { authManager.loadProfile() } },
-                    onSaveUsername = { username -> scope?.launch { authManager.saveUsername(username) } },
+                    onLoadProfile = { lifecycleScope?.launch { authManager.loadProfile() } },
+                    onSaveUsername = { username -> lifecycleScope?.launch { authManager.saveUsername(username) } },
                     onGoogleSignIn = {
                         authManager.beginSignIn()
                         googleSignInLauncher.launch(authManager.getSignInIntent())
@@ -429,28 +450,40 @@ fun AuthScreen(
 fun TopBar(title: String, onSearchClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = AppColors.Midnight,
+        color = AppColors.Midnight.copy(alpha = 0.96f),
         tonalElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Surface(
+                modifier = Modifier.size(34.dp),
+                shape = CircleShape,
+                color = AppColors.Accent.copy(alpha = 0.14f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = AppColors.Accent, modifier = Modifier.size(19.dp))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
             Text(
                 text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
                 color = AppColors.TextPrimary,
-                letterSpacing = 0.8.sp
             )
             Spacer(Modifier.weight(1f))
-            IconButton(
-                onClick = onSearchClick,
-                modifier = Modifier.size(36.dp)
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = AppColors.Panel
             ) {
-                Icon(Icons.Default.Search, contentDescription = "Search", tint = AppColors.TextPrimary)
+                IconButton(onClick = onSearchClick) {
+                    Icon(Icons.Default.Search, contentDescription = "Search", tint = AppColors.TextPrimary, modifier = Modifier.size(19.dp))
+                }
             }
         }
     }
@@ -472,15 +505,15 @@ fun HomeScreen(
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
                 onClick = onImport,
                 enabled = !isLoading,
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong, contentColor = AppColors.TextPrimary),
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -489,9 +522,9 @@ fun HomeScreen(
             Button(
                 onClick = onDownload,
                 enabled = !isLoading,
-                modifier = Modifier.weight(1f).height(46.dp),
+                modifier = Modifier.weight(1f).height(48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AppColors.Panel, contentColor = AppColors.TextPrimary),
-                shape = RoundedCornerShape(14.dp)
+                shape = MaterialTheme.shapes.medium
             ) {
                 Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
@@ -502,7 +535,7 @@ fun HomeScreen(
         if (songs.isEmpty()) {
             EmptyLibrary(onImport, onDownload, !isLoading)
         } else {
-            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 20.dp)) {
                 items(filtered, key = { it.id }) { song ->
                     SongRow(
                         song,
@@ -535,7 +568,7 @@ fun LibraryScreen(
                 }
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 20.dp)) {
                 items(filtered, key = { it.id }) { song ->
                     SongRow(
                         song,
@@ -565,7 +598,8 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = AppColors.SurfaceElevated,
-                shape = RoundedCornerShape(20.dp)
+                shape = MaterialTheme.shapes.large,
+                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
             ) {
                 Row(
                     modifier = Modifier
@@ -594,7 +628,8 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = AppColors.SurfaceElevated,
-                shape = RoundedCornerShape(20.dp)
+                shape = MaterialTheme.shapes.large,
+                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val bands = equalizerState.bandLevels
@@ -628,11 +663,15 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = AppColors.SurfaceElevated,
-                shape = RoundedCornerShape(20.dp)
+                shape = MaterialTheme.shapes.large,
+                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Presets", color = AppColors.TextPrimary, style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                    ) {
                         listOf("Flat", "Bass", "Treble", "Vocal", "Club").forEach { preset ->
                             val selected = equalizerState.presetName == preset
                             FilterChip(
@@ -838,28 +877,37 @@ fun ProfileScreen(
 @Composable
 fun EmptyLibrary(onImport: () -> Unit, onDownload: () -> Unit, enabled: Boolean) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-            Icon(Icons.Default.LibraryMusic, null, Modifier.size(56.dp), tint = AppColors.Accent)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+            Surface(
+                modifier = Modifier.size(84.dp),
+                shape = CircleShape,
+                color = AppColors.Accent.copy(alpha = 0.12f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.LibraryMusic, null, Modifier.size(40.dp), tint = AppColors.Accent)
+                }
+            }
             Spacer(Modifier.height(12.dp))
-            Text("Your private library is empty", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
-            Text("Import an audio file or download from YouTube", style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary)
+            Text("Your library is quiet", style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
+            Spacer(Modifier.height(4.dp))
+            Text("Bring in a favorite track to get started", style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary)
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = onImport,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f).height(46.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
                     Text("Import")
                 }
                 Button(
                     onClick = onDownload,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f).height(46.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = AppColors.Panel),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = MaterialTheme.shapes.medium
                 ) {
                     Text("Download")
                 }
@@ -877,24 +925,25 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
     Surface(
         modifier = Modifier
             .clickable(onClick = onPlay)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 5.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp)),
+            .clip(MaterialTheme.shapes.medium),
         color = if (selected) AppColors.PanelStrong else AppColors.SurfaceElevated,
-        shadowElevation = if (selected) 6.dp else 0.dp
+        shadowElevation = if (selected) 5.dp else 0.dp,
+        border = BorderStroke(1.dp, if (selected) AppColors.Accent.copy(alpha = 0.42f) else AppColors.Border.copy(alpha = 0.35f))
     ) {
         Box {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(10.dp),
+                    .padding(horizontal = 12.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Artwork(song, Modifier.size(52.dp))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-                    Text("${song.artist} • ${song.album}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+                        Text("${song.artist} / ${song.album}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
                 }
                 Text(formatTime(song.durationMs), style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
                 Spacer(Modifier.width(8.dp))
@@ -950,10 +999,11 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
 fun SearchDialog(query: String, onQueryChange: (String) -> Unit, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(22.dp),
+            shape = MaterialTheme.shapes.large,
             color = AppColors.SurfaceElevated,
             tonalElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+            border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.7f))
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Search", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
@@ -963,7 +1013,7 @@ fun SearchDialog(query: String, onQueryChange: (String) -> Unit, onDismiss: () -
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("Search library") },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = MaterialTheme.shapes.small,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = AppColors.Accent,
                         unfocusedBorderColor = AppColors.Border,
@@ -1006,13 +1056,14 @@ fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Un
         modifier = modifier
             .shadow(12.dp)
             .clickable(onClick = onTap),
-        color = Color.Transparent
+        color = AppColors.SurfaceElevated,
+        border = BorderStroke(1.dp, AppColors.Accent.copy(alpha = 0.24f))
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(AppColors.GradientBrush)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .background(AppColors.SurfaceElevated)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             state.current?.let { song ->
@@ -1032,6 +1083,7 @@ fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Un
                         tint = AppColors.TextPrimary
                     )
                 }
+                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Open player", tint = AppColors.TextMuted, modifier = Modifier.size(20.dp))
             }
         }
     }
@@ -1047,8 +1099,8 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
             Column(
                 Modifier
                     .fillMaxSize()
-                    .background(AppColors.GradientBrush)
-                    .padding(16.dp),
+                    .background(AppColors.Midnight)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -1060,7 +1112,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.KeyboardArrowDown, null, tint = AppColors.TextPrimary)
                     }
-                    Text("Now Playing", color = AppColors.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                    Text("NOW PLAYING", color = AppColors.TextSecondary, style = MaterialTheme.typography.labelLarge, letterSpacing = 1.5.sp)
                     IconButton(onClick = {}) {
                         Icon(Icons.Default.MoreVert, null, tint = AppColors.TextPrimary)
                     }
@@ -1069,8 +1121,10 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                 state.current?.let { song ->
                     Surface(
                         modifier = Modifier
-                            .size(300.dp)
-                            .clip(RoundedCornerShape(26.dp))
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .padding(horizontal = 12.dp)
+                            .clip(MaterialTheme.shapes.large)
                             .shadow(16.dp),
                         color = AppColors.SurfaceElevated
                     ) {
@@ -1080,9 +1134,9 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                     Spacer(Modifier.height(24.dp))
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(song.title, style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(song.title, style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                         Spacer(Modifier.height(4.dp))
-                        Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary.copy(alpha = 0.8f))
+                        Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextSecondary)
                     }
 
                     Spacer(Modifier.height(24.dp))
@@ -1182,7 +1236,7 @@ fun DownloadDialog(onDismiss: () -> Unit, isLoading: Boolean = false, onDownload
                 label = { Text("Audio or YouTube URL") },
                 singleLine = true,
                 enabled = !isLoading,
-                shape = RoundedCornerShape(12.dp),
+                shape = MaterialTheme.shapes.small,
                 textStyle = LocalTextStyle.current.copy(color = AppColors.TextPrimary)
             )
         },

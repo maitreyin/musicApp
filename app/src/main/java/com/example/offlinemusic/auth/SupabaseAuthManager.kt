@@ -15,10 +15,13 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.auth.user.UserSession
-import io.github.jan.supabase.from
 import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.postgrest.from
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.coroutines.Dispatchers
@@ -105,11 +108,6 @@ class SupabaseAuthManager(private val context: Context) {
                 avatarUrl = account.photoUrl?.toString()
             )
             _authState.value = state
-            loadOrCreateProfile(
-                userId = session.user?.id ?: error("Supabase user ID is missing."),
-                displayName = account.displayName,
-                avatarUrl = account.photoUrl?.toString()
-            )
             state
         }.onFailure { throwable ->
             val message = friendlyErrorMessage()
@@ -140,11 +138,22 @@ class SupabaseAuthManager(private val context: Context) {
         }
 
         _profileState.value = _profileState.value.copy(isLoading = true, error = null)
-        runCatching { fetchProfile(userId) }
+        runCatching {
+            fetchProfile(userId) ?: run {
+                supabase.from("profiles").insert(
+                    buildJsonObject {
+                        put("id", userId)
+                        put("username", _authState.value.displayName?.let(::JsonPrimitive) ?: JsonNull)
+                        put("avatar_url", _authState.value.avatarUrl?.let(::JsonPrimitive) ?: JsonNull)
+                    }
+                )
+                fetchProfile(userId)
+            }
+        }
             .onSuccess { profile ->
                 _profileState.value = ProfileUiState(
-                    username = profile?.get("username")?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    avatarUrl = profile?.get("avatar_url")?.jsonPrimitive?.contentOrNull
+                    username = profile?.stringValue("username").orEmpty(),
+                    avatarUrl = profile?.stringValue("avatar_url")
                 )
             }
             .onFailure { throwable ->
@@ -165,7 +174,7 @@ class SupabaseAuthManager(private val context: Context) {
             supabase.from("profiles").update(
                 buildJsonObject { put("username", username.trim()) }
             ) {
-                eq("id", userId)
+                filter { eq("id", userId) }
             }
         }.onSuccess {
             _profileState.value = _profileState.value.copy(
@@ -182,24 +191,13 @@ class SupabaseAuthManager(private val context: Context) {
         }
     }
 
-    private suspend fun loadOrCreateProfile(userId: String, displayName: String?, avatarUrl: String?) {
-        val existing = fetchProfile(userId)
-        if (existing == null) {
-            supabase.from("profiles").insert(
-                buildJsonObject {
-                    put("id", userId)
-                    put("username", displayName ?: JsonNull)
-                    put("avatar_url", avatarUrl ?: JsonNull)
-                }
-            )
-        }
-        loadProfile()
-    }
-
     private suspend fun fetchProfile(userId: String) =
         supabase.from("profiles").select {
-            eq("id", userId)
-        }.decodeList<kotlinx.serialization.json.JsonObject>().firstOrNull()
+            filter { eq("id", userId) }
+        }.decodeList<JsonObject>().firstOrNull()
+
+    private fun JsonObject.stringValue(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull
 
     private fun updateStateFromSession(session: UserSession?) {
         _authState.value = session?.let(::stateFromSession) ?: AuthUiState()

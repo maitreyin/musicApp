@@ -54,13 +54,7 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    listOf(AppColors.Midnight, AppColors.AccentStrong, AppColors.Accent),
-                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
-                    end = androidx.compose.ui.geometry.Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
-                )
-            ),
+            .background(AppColors.Midnight),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -79,7 +73,7 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
                         "MUSED",
-                        fontSize = 48.sp,
+                        style = MaterialTheme.typography.displaySmall,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                         color = AppColors.TextPrimary,
                         textAlign = TextAlign.Center
@@ -92,7 +86,7 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
             AnimatedVisibility(visible = showTagline, enter = fadeIn(), exit = fadeOut()) {
                 Text(
                     "Your Music, Offline",
-                    fontSize = 18.sp,
+                    style = MaterialTheme.typography.titleMedium,
                     color = AppColors.TextPrimary.copy(alpha = 0.9f),
                     textAlign = TextAlign.Center
                 )

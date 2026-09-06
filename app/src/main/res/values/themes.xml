@@ -1,8 +1,8 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.OfflineMusic" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:colorBackground">@color/surface_dark</item>
-        <item name="android:colorPrimary">@color/primary_pink</item>
-        <item name="android:colorAccent">@color/primary_purple</item>
+        <item name="android:colorPrimary">@color/primary_cyan</item>
+        <item name="android:colorAccent">@color/accent_blue</item>
         <item name="android:textColor">@color/text_white</item>
     </style>
 </resources>
