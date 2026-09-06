@@ -4,5 +4,9 @@ local.properties
 *.iml
 .idea/
 dbDetails.txt
+# Local MCP configuration
+.vscode/mcp.json
+
+
 
 

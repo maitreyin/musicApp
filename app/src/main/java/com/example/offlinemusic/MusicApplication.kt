@@ -2,6 +2,7 @@ package com.example.offlinemusic
 
 import android.app.Application
 import androidx.room.Room
+import com.example.offlinemusic.auth.SupabaseAuthManager
 import com.example.offlinemusic.data.SongDatabase
 import com.example.offlinemusic.data.SongRepository
 import com.example.offlinemusic.data.NewPipeHttpDownloader
@@ -16,5 +17,9 @@ class MusicApplication : Application() {
     val repository: SongRepository by lazy {
         val database = Room.databaseBuilder(this, SongDatabase::class.java, "music.db").build()
         SongRepository(this, database.songDao())
+    }
+
+    val authManager: SupabaseAuthManager by lazy {
+        SupabaseAuthManager(this)
     }
 }

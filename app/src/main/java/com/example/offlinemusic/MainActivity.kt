@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -13,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -36,6 +38,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import coil.compose.AsyncImage
+import com.example.offlinemusic.auth.AuthUiState
+import com.example.offlinemusic.auth.ProfileUiState
 import com.example.offlinemusic.data.Song
 import com.example.offlinemusic.player.PlaybackState
 import com.example.offlinemusic.player.PlayerViewModel
@@ -56,7 +61,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MusicTheme {
-                MusicApp(viewModel, { importAudio.launch("audio/*") }) { url, onStart, onSuccess, onError ->
+                MusicApp(
+                    viewModel = viewModel,
+                    authManager = (application as MusicApplication).authManager,
+                    onImport = { importAudio.launch("audio/*") }
+                ) { url, onStart, onSuccess, onError ->
                     lifecycleScope.launch {
                         onStart()
                         runCatching {
@@ -110,25 +119,49 @@ fun MusicTheme(content: @Composable () -> Unit) {
 }
 
 enum class Screen {
-    HOME, LIBRARY, EQUALIZER, PROFILE
+    AUTH, HOME, LIBRARY, EQUALIZER, PROFILE
 }
 
 @Composable
 fun MusicApp(
     viewModel: PlayerViewModel,
+    authManager: com.example.offlinemusic.auth.SupabaseAuthManager,
     onImport: () -> Unit,
     onDownload: (String, onStart: () -> Unit, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit
 ) {
     val songs by viewModel.songs.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
+    val authState by authManager.authState.collectAsStateWithLifecycle()
+    val profileState by authManager.profileState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val startupScreen = if (authState.signedIn) Screen.PROFILE else Screen.AUTH
 
-    var currentScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
+    LaunchedEffect(Unit) {
+        authManager.restoreSignedInState()
+    }
+
+    val googleSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val scope = (context as? ComponentActivity)?.lifecycleScope ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            authManager.handleSignInResult(result)
+        }
+    }
+
+    var currentScreen by rememberSaveable { mutableStateOf(startupScreen) }
     var showDownload by rememberSaveable { mutableStateOf(false) }
     var isDownloading by rememberSaveable { mutableStateOf(false) }
     var downloadError by rememberSaveable { mutableStateOf<String?>(null) }
     var downloadSuccess by rememberSaveable { mutableStateOf<String?>(null) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(authState.signedIn) {
+        if (authState.signedIn) {
+            currentScreen = Screen.PROFILE
+        } else if (currentScreen == Screen.PROFILE) {
+            currentScreen = Screen.AUTH
+        }
+    }
 
     var search by rememberSaveable { mutableStateOf("") }
     val filtered = remember(songs, search) {
@@ -210,71 +243,82 @@ fun MusicApp(
         FullScreenPlayer(playback, viewModel, onDismiss = { showFullPlayer = false })
     }
 
+    val bottomBarVisible = currentScreen != Screen.AUTH
+
     Scaffold(
         containerColor = AppColors.Midnight,
         bottomBar = {
-            Column {
-                if (playback.current != null) {
-                    MiniPlayer(playback, viewModel, { showFullPlayer = true }, Modifier.fillMaxWidth())
-                }
-                NavigationBar(
-                    containerColor = AppColors.SurfaceElevated,
-                    modifier = Modifier.shadow(8.dp)
-                ) {
-                    NavigationBarItem(
-                        icon = { Icon(Icons.Default.Home, null) },
-                        label = { Text("HOME") },
-                        selected = currentScreen == Screen.HOME,
-                        onClick = { currentScreen = Screen.HOME },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AppColors.Accent,
-                            selectedTextColor = AppColors.Accent,
-                            unselectedIconColor = AppColors.TextSecondary,
-                            unselectedTextColor = AppColors.TextSecondary
+            if (bottomBarVisible) {
+                Column {
+                    if (playback.current != null) {
+                        MiniPlayer(playback, viewModel, { showFullPlayer = true }, Modifier.fillMaxWidth())
+                    }
+                    NavigationBar(
+                        containerColor = AppColors.SurfaceElevated,
+                        modifier = Modifier.shadow(8.dp)
+                    ) {
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.Home, null) },
+                            label = { Text("HOME") },
+                            selected = currentScreen == Screen.HOME,
+                            onClick = { currentScreen = Screen.HOME },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AppColors.Accent,
+                                selectedTextColor = AppColors.Accent,
+                                unselectedIconColor = AppColors.TextSecondary,
+                                unselectedTextColor = AppColors.TextSecondary
+                            )
                         )
-                    )
-                    NavigationBarItem(
-                        icon = { Icon(Icons.Default.LibraryMusic, null) },
-                        label = { Text("LIBRARY") },
-                        selected = currentScreen == Screen.LIBRARY,
-                        onClick = { currentScreen = Screen.LIBRARY },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AppColors.Accent,
-                            selectedTextColor = AppColors.Accent,
-                            unselectedIconColor = AppColors.TextSecondary,
-                            unselectedTextColor = AppColors.TextSecondary
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.LibraryMusic, null) },
+                            label = { Text("LIBRARY") },
+                            selected = currentScreen == Screen.LIBRARY,
+                            onClick = { currentScreen = Screen.LIBRARY },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AppColors.Accent,
+                                selectedTextColor = AppColors.Accent,
+                                unselectedIconColor = AppColors.TextSecondary,
+                                unselectedTextColor = AppColors.TextSecondary
+                            )
                         )
-                    )
-                    NavigationBarItem(
-                        icon = { Icon(Icons.Default.Tune, null) },
-                        label = { Text("EQUALIZER") },
-                        selected = currentScreen == Screen.EQUALIZER,
-                        onClick = { currentScreen = Screen.EQUALIZER },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AppColors.Accent,
-                            selectedTextColor = AppColors.Accent,
-                            unselectedIconColor = AppColors.TextSecondary,
-                            unselectedTextColor = AppColors.TextSecondary
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.Tune, null) },
+                            label = { Text("EQUALIZER") },
+                            selected = currentScreen == Screen.EQUALIZER,
+                            onClick = { currentScreen = Screen.EQUALIZER },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AppColors.Accent,
+                                selectedTextColor = AppColors.Accent,
+                                unselectedIconColor = AppColors.TextSecondary,
+                                unselectedTextColor = AppColors.TextSecondary
+                            )
                         )
-                    )
-                    NavigationBarItem(
-                        icon = { Icon(Icons.Default.Person, null) },
-                        label = { Text("PROFILE") },
-                        selected = currentScreen == Screen.PROFILE,
-                        onClick = { currentScreen = Screen.PROFILE },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AppColors.Accent,
-                            selectedTextColor = AppColors.Accent,
-                            unselectedIconColor = AppColors.TextSecondary,
-                            unselectedTextColor = AppColors.TextSecondary
+                        NavigationBarItem(
+                            icon = { Icon(Icons.Default.Person, null) },
+                            label = { Text("PROFILE") },
+                            selected = currentScreen == Screen.PROFILE,
+                            onClick = { currentScreen = Screen.PROFILE },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AppColors.Accent,
+                                selectedTextColor = AppColors.Accent,
+                                unselectedIconColor = AppColors.TextSecondary,
+                                unselectedTextColor = AppColors.TextSecondary
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize().background(AppColors.Midnight)) {
             when (currentScreen) {
+                Screen.AUTH -> AuthScreen(
+                    authState = authState,
+                    onGoogleSignIn = {
+                        authManager.beginSignIn()
+                        googleSignInLauncher.launch(authManager.getSignInIntent())
+                    }
+                )
                 Screen.HOME -> HomeScreen(
                     songs,
                     filtered,
@@ -286,7 +330,96 @@ fun MusicApp(
                 )
                 Screen.LIBRARY -> LibraryScreen(songs, filtered, viewModel, { showSearch = true })
                 Screen.EQUALIZER -> EqualizerScreen(viewModel, { showSearch = true })
-                Screen.PROFILE -> ProfileScreen({ showSearch = true })
+                Screen.PROFILE -> ProfileScreen(
+                    authState = authState,
+                    profileState = profileState,
+                    onSearchClick = { showSearch = true },
+                    onLoadProfile = { scope?.launch { authManager.loadProfile() } },
+                    onSaveUsername = { username -> scope?.launch { authManager.saveUsername(username) } },
+                    onGoogleSignIn = {
+                        authManager.beginSignIn()
+                        googleSignInLauncher.launch(authManager.getSignInIntent())
+                    },
+                    onSignOut = {
+                        val scope = (context as? ComponentActivity)?.lifecycleScope
+                        scope?.launch { authManager.signOut() }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AuthScreen(
+    authState: AuthUiState,
+    onGoogleSignIn: () -> Unit
+) {
+    Box(Modifier.fillMaxSize().background(AppColors.Midnight), contentAlignment = Alignment.Center) {
+        Surface(
+            color = AppColors.SurfaceElevated,
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 420.dp)
+                .padding(24.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Surface(
+                    color = AppColors.Accent.copy(alpha = 0.14f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(42.dp), tint = AppColors.Accent)
+                    }
+                }
+                Text("Login or Sign Up", style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
+                Text(
+                    "Continue with Google to access your MUSED profile and music library.",
+                    color = AppColors.TextSecondary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Button(
+                    onClick = onGoogleSignIn,
+                    enabled = !authState.isLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent, contentColor = AppColors.Midnight),
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    if (authState.isLoading) {
+                        CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Continue with Google")
+                }
+
+                if (!authState.error.isNullOrBlank()) {
+                    Surface(
+                        color = AppColors.AccentStrong.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                authState.error,
+                                color = AppColors.TextPrimary,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            TextButton(
+                                onClick = onGoogleSignIn,
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("Try again", color = AppColors.Accent)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -522,17 +655,181 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
 }
 
 @Composable
-fun ProfileScreen(onSearchClick: () -> Unit) {
+fun ProfileScreen(
+    authState: AuthUiState,
+    profileState: ProfileUiState,
+    onSearchClick: () -> Unit,
+    onLoadProfile: () -> Unit,
+    onSaveUsername: (String) -> Unit,
+    onGoogleSignIn: () -> Unit,
+    onSignOut: () -> Unit
+) {
+    LaunchedEffect(authState.signedIn) {
+        if (authState.signedIn) onLoadProfile()
+    }
+
+    var isEditing by rememberSaveable { mutableStateOf(false) }
+    var usernameDraft by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(profileState.username) {
+        if (!isEditing) usernameDraft = profileState.username
+    }
+
     Column(Modifier.fillMaxSize().background(AppColors.Midnight)) {
         TopBar("Profile", onSearchClick)
 
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Person, null, Modifier.size(64.dp), tint = AppColors.TextSecondary)
-                Spacer(Modifier.height(16.dp))
-                Text("Profile Placeholder", color = AppColors.TextPrimary)
-                Spacer(Modifier.height(8.dp))
-                Text("Authentication is not implemented yet.", color = AppColors.TextSecondary)
+            if (authState.signedIn) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val profileAvatarUrl = profileState.avatarUrl ?: authState.avatarUrl
+                    if (!profileAvatarUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = profileAvatarUrl,
+                            contentDescription = "Google profile avatar",
+                            modifier = Modifier.size(76.dp).clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Surface(shape = CircleShape, color = AppColors.PanelStrong, modifier = Modifier.size(76.dp)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Person, null, Modifier.size(40.dp), tint = AppColors.Accent)
+                            }
+                        }
+                    }
+
+                    Text(
+                        profileState.username.ifBlank { authState.displayName ?: "Google User" },
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AppColors.TextPrimary
+                    )
+                    if (!authState.email.isNullOrBlank()) {
+                        Text(authState.email, color = AppColors.TextSecondary)
+                    }
+
+                    if (profileState.isLoading) {
+                        CircularProgressIndicator(color = AppColors.Accent, modifier = Modifier.size(24.dp))
+                    }
+
+                    if (!profileState.error.isNullOrBlank()) {
+                        Text(profileState.error, color = AppColors.AccentStrong)
+                    }
+
+                    if (isEditing) {
+                        OutlinedTextField(
+                            value = usernameDraft,
+                            onValueChange = { usernameDraft = it },
+                            singleLine = true,
+                            label = { Text("Username") },
+                            enabled = !profileState.isSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AppColors.Accent,
+                                unfocusedBorderColor = AppColors.Border,
+                                focusedLabelColor = AppColors.Accent,
+                                unfocusedLabelColor = AppColors.TextSecondary,
+                                focusedTextColor = AppColors.TextPrimary,
+                                unfocusedTextColor = AppColors.TextPrimary
+                            )
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    usernameDraft = profileState.username
+                                    isEditing = false
+                                },
+                                enabled = !profileState.isSaving,
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Cancel", color = AppColors.TextSecondary) }
+                            Button(
+                                onClick = {
+                                    onSaveUsername(usernameDraft)
+                                    isEditing = false
+                                },
+                                enabled = usernameDraft.trim().isNotEmpty() && !profileState.isSaving,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.Accent,
+                                    contentColor = AppColors.Midnight
+                                )
+                            ) {
+                                if (profileState.isSaving) {
+                                    CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
+                                } else {
+                                    Text("Save")
+                                }
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                usernameDraft = profileState.username
+                                isEditing = true
+                            },
+                            enabled = !profileState.isLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AppColors.Accent,
+                                contentColor = AppColors.Midnight
+                            )
+                        ) {
+                            Text("Edit Profile")
+                        }
+                    }
+
+                    Button(
+                        onClick = onSignOut,
+                        enabled = !profileState.isSaving,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong, contentColor = AppColors.TextPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Sign Out")
+                    }
+
+                    OutlinedButton(
+                        onClick = { },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextMuted),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = androidx.compose.ui.graphics.SolidColor(AppColors.Border)
+                        )
+                    ) {
+                        Text("Delete Account")
+                    }
+                }
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                    Icon(Icons.Default.Person, null, Modifier.size(64.dp), tint = AppColors.TextSecondary)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Welcome to MUSED", color = AppColors.TextPrimary, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Sign in to continue to MUSED.", color = AppColors.TextSecondary)
+                    Spacer(Modifier.height(20.dp))
+
+                    Button(
+                        onClick = onGoogleSignIn,
+                        enabled = !authState.isLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent, contentColor = AppColors.Midnight),
+                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                    ) {
+                        if (authState.isLoading) {
+                            CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text("Continue with Google")
+                    }
+
+                    if (!authState.error.isNullOrBlank()) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(authState.error, color = AppColors.AccentStrong)
+                    }
+                }
             }
         }
     }
