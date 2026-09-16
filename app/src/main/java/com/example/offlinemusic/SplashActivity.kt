@@ -17,17 +17,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.example.offlinemusic.ui.theme.MusedColors
+import com.example.offlinemusic.ui.theme.ThemeManager
 import kotlinx.coroutines.delay
 
 class SplashActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MusicTheme {
+            val themeManager = remember { ThemeManager(this) }
+            val palette = remember { themeManager.resolve() }
+
+            MusicTheme(palette) {
                 SplashScreen(onSplashComplete = {
                     startActivity(Intent(this, MainActivity::class.java))
                     finish()
@@ -39,9 +43,10 @@ class SplashActivity : ComponentActivity() {
 
 @Composable
 fun SplashScreen(onSplashComplete: () -> Unit) {
+    val c = MusedColors.current
     var showContent by remember { mutableStateOf(false) }
     var showTagline by remember { mutableStateOf(false) }
-    
+
     LaunchedEffect(Unit) {
         delay(300)
         showContent = true
@@ -50,11 +55,11 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
         delay(1500)
         onSplashComplete()
     }
-    
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppColors.Midnight),
+            .background(c.background),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -68,14 +73,14 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
                         Icons.Default.MusicNote,
                         null,
                         modifier = Modifier.size(80.dp),
-                        tint = AppColors.TextPrimary
+                        tint = c.accent
                     )
                     Spacer(modifier = Modifier.height(24.dp))
                     Text(
                         "MUSED",
                         style = MaterialTheme.typography.displaySmall,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                        color = AppColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        color = c.textPrimary,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -87,7 +92,7 @@ fun SplashScreen(onSplashComplete: () -> Unit) {
                 Text(
                     "Your Music, Offline",
                     style = MaterialTheme.typography.titleMedium,
-                    color = AppColors.TextPrimary.copy(alpha = 0.9f),
+                    color = c.textSecondary,
                     textAlign = TextAlign.Center
                 )
             }

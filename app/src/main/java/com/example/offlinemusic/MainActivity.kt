@@ -8,18 +8,23 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.runtime.*
@@ -36,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,7 +56,12 @@ import com.example.offlinemusic.data.Song
 import com.example.offlinemusic.player.PlaybackState
 import com.example.offlinemusic.player.PlayerViewModel
 import com.example.offlinemusic.player.RepeatMode
+import com.example.offlinemusic.ui.theme.*
 import kotlinx.coroutines.launch
+
+/* ═══════════════════════════════════════════════════════════════
+   Activity
+   ═══════════════════════════════════════════════════════════════ */
 
 class MainActivity : ComponentActivity() {
     private val viewModel: PlayerViewModel by viewModels()
@@ -65,11 +76,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MusicTheme {
+            val themeManager = remember { ThemeManager(this) }
+            var themeKey by remember { mutableStateOf(themeManager.selectedKey()) }
+            val palette = remember(themeKey) { BuiltInThemes[themeKey] ?: themeManager.resolve() }
+
+            MusicTheme(palette) {
                 MusicApp(
                     viewModel = viewModel,
                     authManager = (application as MusicApplication).authManager,
-                    onImport = { importAudio.launch("audio/*") }
+                    onImport = { importAudio.launch("audio/*") },
+                    themeKey = themeKey,
+                    onThemeChange = { key ->
+                        themeManager.select(key)
+                        themeKey = key
+                    }
                 ) { url, onStart, onSuccess, onError ->
                     lifecycleScope.launch {
                         onStart()
@@ -88,84 +108,83 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-object AppColors {
-    val Midnight = Color(0xFF0B1020)
-    val Surface = Color(0xFF101827)
-    val SurfaceElevated = Color(0xFF172235)
-    val Panel = Color(0xFF1D2B40)
-    val PanelStrong = Color(0xFF263A52)
-    val Border = Color(0xFF2F3F56)
-    val Accent = Color(0xFF67E8F9)
-    val AccentStrong = Color(0xFF38BDF8)
-    val Success = Color(0xFF34D399)
-    val TextPrimary = Color(0xFFEAF3FF)
-    val TextSecondary = Color(0xFF9AA9BD)
-    val TextMuted = Color(0xFF6B7C96)
-    val GradientBrush = Brush.linearGradient(listOf(Color(0xFF0F172A), Color(0xFF1D4ED8), Color(0xFF0EA5E9)))
-}
+/* ═══════════════════════════════════════════════════════════════
+   Theme wrapper
+   ═══════════════════════════════════════════════════════════════ */
 
 @Composable
-fun MusicTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = AppColors.Accent,
-            secondary = AppColors.AccentStrong,
-            tertiary = AppColors.Success,
-            surface = AppColors.SurfaceElevated,
-            background = AppColors.Midnight,
-            onPrimary = AppColors.Midnight,
-            onSecondary = AppColors.Midnight,
-            onBackground = AppColors.TextPrimary,
-            onSurface = AppColors.TextPrimary
-        ),
-        typography = Typography(
-            displaySmall = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold),
-            headlineSmall = TextStyle(fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold),
-            titleLarge = TextStyle(fontWeight = FontWeight.SemiBold),
-            titleMedium = TextStyle(fontWeight = FontWeight.SemiBold),
-            bodyLarge = TextStyle(fontWeight = FontWeight.Medium),
-            labelLarge = TextStyle(fontWeight = FontWeight.SemiBold)
-        ),
-        shapes = Shapes(
-            extraSmall = RoundedCornerShape(8.dp),
-            small = RoundedCornerShape(12.dp),
-            medium = RoundedCornerShape(16.dp),
-            large = RoundedCornerShape(22.dp),
-            extraLarge = RoundedCornerShape(28.dp)
-        )
-    ) {
-        content()
+fun MusicTheme(palette: MusedPalette = LocalMusedColors.current, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalMusedColors provides palette) {
+        val c = palette
+        MaterialTheme(
+            colorScheme = darkColorScheme(
+                primary = c.accent,
+                secondary = c.accentDark,
+                tertiary = c.success,
+                surface = c.surfaceElevated,
+                background = c.background,
+                onPrimary = c.background,
+                onSecondary = c.background,
+                onBackground = c.textPrimary,
+                onSurface = c.textPrimary
+            ),
+            typography = Typography(
+                displaySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 28.sp),
+                headlineSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 22.sp),
+                titleLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 20.sp),
+                titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
+                bodyLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = 15.sp),
+                bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp),
+                bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = 12.sp),
+                labelLarge = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, letterSpacing = 0.5.sp),
+                labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp)
+            ),
+            shapes = Shapes(
+                extraSmall = RoundedCornerShape(8.dp),
+                small = RoundedCornerShape(12.dp),
+                medium = RoundedCornerShape(16.dp),
+                large = RoundedCornerShape(22.dp),
+                extraLarge = RoundedCornerShape(28.dp)
+            )
+        ) {
+            content()
+        }
     }
 }
 
-enum class Screen {
-    AUTH, HOME, LIBRARY, EQUALIZER, PROFILE
-}
+/* ═══════════════════════════════════════════════════════════════
+   Navigation
+   ═══════════════════════════════════════════════════════════════ */
+
+enum class Screen { AUTH, HOME, LIBRARY, EQUALIZER, PROFILE }
+
+/* ═══════════════════════════════════════════════════════════════
+   Root composable
+   ═══════════════════════════════════════════════════════════════ */
 
 @Composable
 fun MusicApp(
     viewModel: PlayerViewModel,
     authManager: com.example.offlinemusic.auth.SupabaseAuthManager,
     onImport: () -> Unit,
+    themeKey: String,
+    onThemeChange: (String) -> Unit,
     onDownload: (String, onStart: () -> Unit, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit
 ) {
+    val c = MusedColors.current
     val songs by viewModel.songs.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
     val authState by authManager.authState.collectAsStateWithLifecycle()
     val profileState by authManager.profileState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleScope = (context as? ComponentActivity)?.lifecycleScope
-    val startupScreen = if (authState.signedIn) Screen.PROFILE else Screen.AUTH
+    val startupScreen = if (authState.signedIn) Screen.HOME else Screen.AUTH
 
-    LaunchedEffect(Unit) {
-        authManager.restoreSignedInState()
-    }
+    LaunchedEffect(Unit) { authManager.restoreSignedInState() }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val scope = (context as? ComponentActivity)?.lifecycleScope ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            authManager.handleSignInResult(result)
-        }
+        scope.launch { authManager.handleSignInResult(result) }
     }
 
     var currentScreen by rememberSaveable { mutableStateOf(startupScreen) }
@@ -178,7 +197,7 @@ fun MusicApp(
 
     LaunchedEffect(authState.signedIn) {
         if (authState.signedIn) {
-            currentScreen = Screen.PROFILE
+            if (currentScreen == Screen.AUTH) currentScreen = Screen.HOME
         } else if (currentScreen == Screen.PROFILE) {
             currentScreen = Screen.AUTH
         }
@@ -190,84 +209,65 @@ fun MusicApp(
     }
 
     val handleDownload: (String) -> Unit = { url ->
-        onDownload(
-            url,
-            {
-                isDownloading = true
-                downloadError = null
-                downloadSuccess = null
-            },
-            { message ->
-                isDownloading = false
-                downloadSuccess = message
-                showDownload = false
-            },
-            { error ->
-                isDownloading = false
-                downloadError = error
-            }
+        onDownload(url,
+            { isDownloading = true; downloadError = null; downloadSuccess = null },
+            { message -> isDownloading = false; downloadSuccess = message; showDownload = false },
+            { error -> isDownloading = false; downloadError = error }
         )
     }
 
+    /* ─── Dialogs ─── */
     if (showDownload) {
-        DownloadDialog(onDismiss = { showDownload = false }, isLoading = isDownloading) { url ->
-            handleDownload(url)
-        }
+        DownloadDialog(onDismiss = { showDownload = false }, isLoading = isDownloading) { url -> handleDownload(url) }
     }
-
     if (showSearch) {
-        SearchDialog(
-            query = search,
-            onQueryChange = { search = it },
-            onDismiss = { showSearch = false }
-        )
+        SearchDialog(query = search, onQueryChange = { search = it }, onDismiss = { showSearch = false })
     }
-
     if (isDownloading) {
         AlertDialog(
             onDismissRequest = { },
-            title = { Text("Downloading...") },
+            title = { Text("Downloading…", color = c.textPrimary) },
             text = {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = AppColors.Accent)
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    CircularProgressIndicator(color = c.accent, modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
                     Spacer(Modifier.height(16.dp))
-                    Text("Please wait while we download your audio")
+                    Text("Please wait while we download your audio", color = c.textSecondary)
                 }
             },
-            confirmButton = { }
+            confirmButton = { },
+            containerColor = c.surfaceElevated,
+            shape = RoundedCornerShape(24.dp)
         )
     }
-
     downloadError?.let { error ->
         AlertDialog(
             onDismissRequest = { downloadError = null },
-            title = { Text("Download Failed") },
-            text = { Text(error) },
-            confirmButton = {
-                TextButton(onClick = { downloadError = null }) { Text("OK") }
-            }
+            title = { Text("Download Failed", color = c.textPrimary) },
+            text = { Text(error, color = c.textSecondary) },
+            confirmButton = { TextButton(onClick = { downloadError = null }) { Text("OK", color = c.accent) } },
+            containerColor = c.surfaceElevated,
+            shape = RoundedCornerShape(24.dp)
         )
     }
-
     downloadSuccess?.let { success ->
         AlertDialog(
             onDismissRequest = { downloadSuccess = null },
-            title = { Text("Download Successful") },
-            text = { Text(success) },
-            confirmButton = {
-                TextButton(onClick = { downloadSuccess = null }) { Text("OK") }
-            }
+            title = { Text("Download Successful", color = c.textPrimary) },
+            text = { Text(success, color = c.textSecondary) },
+            confirmButton = { TextButton(onClick = { downloadSuccess = null }) { Text("OK", color = c.accent) } },
+            containerColor = c.surfaceElevated,
+            shape = RoundedCornerShape(24.dp)
         )
     }
-
     if (showFullPlayer && playback.current != null) {
         FullScreenPlayer(playback, viewModel, onDismiss = { showFullPlayer = false })
     }
 
+    /* ─── Scaffold ─── */
     val bottomBarVisible = currentScreen != Screen.AUTH
 
     Scaffold(
-        containerColor = AppColors.Midnight,
+        containerColor = c.background,
         bottomBar = {
             if (bottomBarVisible) {
                 Column {
@@ -275,63 +275,44 @@ fun MusicApp(
                         MiniPlayer(playback, viewModel, { showFullPlayer = true }, Modifier.fillMaxWidth())
                     }
                     NavigationBar(
-                        containerColor = AppColors.SurfaceElevated,
-                        modifier = Modifier.shadow(8.dp)
+                        containerColor = c.surface,
+                        contentColor = c.textSecondary,
+                        tonalElevation = 0.dp,
+                        modifier = Modifier.shadow(12.dp)
                     ) {
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.Home, null) },
-                            label = { Text("HOME") },
-                            selected = currentScreen == Screen.HOME,
-                            onClick = { currentScreen = Screen.HOME },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AppColors.Accent,
-                                selectedTextColor = AppColors.Accent,
-                                unselectedIconColor = AppColors.TextSecondary,
-                                unselectedTextColor = AppColors.TextSecondary
-                            )
+                        data class NavItem(val icon: @Composable () -> Unit, val label: String, val screen: Screen)
+                        val items = listOf(
+                            NavItem({ Icon(if (currentScreen == Screen.HOME) Icons.Filled.Home else Icons.Outlined.Home, null) }, "Home", Screen.HOME),
+                            NavItem({ Icon(if (currentScreen == Screen.LIBRARY) Icons.Filled.LibraryMusic else Icons.Outlined.LibraryMusic, null) }, "Library", Screen.LIBRARY),
+                            NavItem({ Icon(if (currentScreen == Screen.EQUALIZER) Icons.Filled.Tune else Icons.Outlined.Tune, null) }, "EQ", Screen.EQUALIZER),
+                            NavItem({ Icon(if (currentScreen == Screen.PROFILE) Icons.Filled.Person else Icons.Outlined.Person, null) }, "Profile", Screen.PROFILE)
                         )
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.LibraryMusic, null) },
-                            label = { Text("LIBRARY") },
-                            selected = currentScreen == Screen.LIBRARY,
-                            onClick = { currentScreen = Screen.LIBRARY },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AppColors.Accent,
-                                selectedTextColor = AppColors.Accent,
-                                unselectedIconColor = AppColors.TextSecondary,
-                                unselectedTextColor = AppColors.TextSecondary
+                        items.forEach { item ->
+                            NavigationBarItem(
+                                icon = item.icon,
+                                label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
+                                selected = currentScreen == item.screen,
+                                onClick = { currentScreen = item.screen },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = c.accent,
+                                    selectedTextColor = c.accent,
+                                    unselectedIconColor = c.textMuted,
+                                    unselectedTextColor = c.textMuted,
+                                    indicatorColor = c.accent.copy(alpha = 0.12f)
+                                )
                             )
-                        )
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.Tune, null) },
-                            label = { Text("EQUALIZER") },
-                            selected = currentScreen == Screen.EQUALIZER,
-                            onClick = { currentScreen = Screen.EQUALIZER },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AppColors.Accent,
-                                selectedTextColor = AppColors.Accent,
-                                unselectedIconColor = AppColors.TextSecondary,
-                                unselectedTextColor = AppColors.TextSecondary
-                            )
-                        )
-                        NavigationBarItem(
-                            icon = { Icon(Icons.Default.Person, null) },
-                            label = { Text("PROFILE") },
-                            selected = currentScreen == Screen.PROFILE,
-                            onClick = { currentScreen = Screen.PROFILE },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = AppColors.Accent,
-                                selectedTextColor = AppColors.Accent,
-                                unselectedIconColor = AppColors.TextSecondary,
-                                unselectedTextColor = AppColors.TextSecondary
-                            )
-                        )
+                        }
                     }
                 }
             }
         }
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize().background(AppColors.Midnight)) {
+        Box(
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(c.background)
+        ) {
             when (currentScreen) {
                 Screen.AUTH -> AuthScreen(
                     authState = authState,
@@ -340,23 +321,17 @@ fun MusicApp(
                         googleSignInLauncher.launch(authManager.getSignInIntent())
                     }
                 )
-                Screen.HOME -> HomeScreen(
-                    songs,
-                    filtered,
-                    viewModel,
-                    onImport,
-                    { showDownload = true },
-                    { showSearch = true },
-                    isDownloading
-                )
+                Screen.HOME -> HomeScreen(songs, filtered, viewModel, onImport, { showDownload = true }, { showSearch = true }, isDownloading)
                 Screen.LIBRARY -> LibraryScreen(songs, filtered, viewModel, { showSearch = true })
                 Screen.EQUALIZER -> EqualizerScreen(viewModel, { showSearch = true })
                 Screen.PROFILE -> ProfileScreen(
                     authState = authState,
                     profileState = profileState,
-                    onSearchClick = { showSearch = true },
+                    themeKey = themeKey,
+                    onThemeChange = onThemeChange,
                     onLoadProfile = { lifecycleScope?.launch { authManager.loadProfile() } },
                     onSaveUsername = { username -> lifecycleScope?.launch { authManager.saveUsername(username) } },
+                    onUpdateAvatar = { uri -> lifecycleScope?.launch { authManager.uploadProfilePicture(uri) } },
                     onGoogleSignIn = {
                         authManager.beginSignIn()
                         googleSignInLauncher.launch(authManager.getSignInIntent())
@@ -371,72 +346,117 @@ fun MusicApp(
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Top App Bar
+   ═══════════════════════════════════════════════════════════════ */
+
 @Composable
-fun AuthScreen(
-    authState: AuthUiState,
-    onGoogleSignIn: () -> Unit
-) {
-    Box(Modifier.fillMaxSize().background(AppColors.Midnight), contentAlignment = Alignment.Center) {
-        Surface(
-            color = AppColors.SurfaceElevated,
-            shape = RoundedCornerShape(28.dp),
-            tonalElevation = 6.dp,
+fun TopBar(title: String, onSearchClick: () -> Unit) {
+    val c = MusedColors.current
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = c.background,
+        tonalElevation = 0.dp
+    ) {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 420.dp)
-                .padding(24.dp)
+                .statusBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = c.textPrimary
+            )
+            Spacer(Modifier.weight(1f))
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = c.card
+            ) {
+                IconButton(onClick = onSearchClick) {
+                    Icon(Icons.Outlined.Search, contentDescription = "Search", tint = c.textSecondary, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Auth Screen
+   ═══════════════════════════════════════════════════════════════ */
+
+@Composable
+fun AuthScreen(authState: AuthUiState, onGoogleSignIn: () -> Unit) {
+    val c = MusedColors.current
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(c.background),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = c.surfaceElevated,
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 0.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 400.dp)
+                .padding(28.dp)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Surface(
-                    color = AppColors.Accent.copy(alpha = 0.14f),
+                    color = c.accent.copy(alpha = 0.12f),
                     shape = CircleShape,
-                    modifier = Modifier.size(72.dp)
+                    modifier = Modifier.size(80.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(42.dp), tint = AppColors.Accent)
+                        Icon(Icons.Default.MusicNote, null, modifier = Modifier.size(40.dp), tint = c.accent)
                     }
                 }
-                Text("Login or Sign Up", style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary)
+                Spacer(Modifier.height(4.dp))
+                Text("Welcome to MUSED", style = MaterialTheme.typography.headlineSmall, color = c.textPrimary, textAlign = TextAlign.Center)
                 Text(
-                    "Continue with Google to access your MUSED profile and music library.",
-                    color = AppColors.TextSecondary,
-                    style = MaterialTheme.typography.bodyMedium
+                    "Sign in with Google to access your library and profile.",
+                    color = c.textSecondary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center
                 )
+                Spacer(Modifier.height(8.dp))
 
                 Button(
                     onClick = onGoogleSignIn,
                     enabled = !authState.isLoading,
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent, contentColor = AppColors.Midnight),
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                    colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.background),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     if (authState.isLoading) {
-                        CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
+                        CircularProgressIndicator(color = c.background, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
                     }
-                    Text("Continue with Google")
+                    Text("Continue with Google", fontWeight = FontWeight.SemiBold)
                 }
 
                 if (!authState.error.isNullOrBlank()) {
                     Surface(
-                        color = AppColors.AccentStrong.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(12.dp),
+                        color = c.error.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                authState.error,
-                                color = AppColors.TextPrimary,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            TextButton(
-                                onClick = onGoogleSignIn,
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text("Try again", color = AppColors.Accent)
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(authState.error, color = c.textPrimary, style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = onGoogleSignIn, contentPadding = PaddingValues(0.dp)) {
+                                Text("Try again", color = c.accent)
                             }
                         }
                     }
@@ -446,48 +466,9 @@ fun AuthScreen(
     }
 }
 
-@Composable
-fun TopBar(title: String, onSearchClick: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = AppColors.Midnight.copy(alpha = 0.96f),
-        tonalElevation = 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                modifier = Modifier.size(34.dp),
-                shape = CircleShape,
-                color = AppColors.Accent.copy(alpha = 0.14f)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = AppColors.Accent, modifier = Modifier.size(19.dp))
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = AppColors.TextPrimary,
-            )
-            Spacer(Modifier.weight(1f))
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = AppColors.Panel
-            ) {
-                IconButton(onClick = onSearchClick) {
-                    Icon(Icons.Default.Search, contentDescription = "Search", tint = AppColors.TextPrimary, modifier = Modifier.size(19.dp))
-                }
-            }
-        }
-    }
-}
+/* ═══════════════════════════════════════════════════════════════
+   Home Screen
+   ═══════════════════════════════════════════════════════════════ */
 
 @Composable
 fun HomeScreen(
@@ -499,43 +480,78 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     isLoading: Boolean
 ) {
-    Column(Modifier.fillMaxSize().background(AppColors.Midnight)) {
+    val c = MusedColors.current
+    Column(Modifier.fillMaxSize()) {
         TopBar("MUSED", onSearchClick)
 
+        /* Action buttons */
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 10.dp),
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Button(
                 onClick = onImport,
                 enabled = !isLoading,
-                modifier = Modifier.weight(1f).height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong, contentColor = AppColors.TextPrimary),
-                shape = MaterialTheme.shapes.medium
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = c.card, contentColor = c.textPrimary),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Outlined.FileOpen, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Import")
+                Text("Import", fontWeight = FontWeight.Medium)
             }
             Button(
                 onClick = onDownload,
                 enabled = !isLoading,
-                modifier = Modifier.weight(1f).height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AppColors.Panel, contentColor = AppColors.TextPrimary),
-                shape = MaterialTheme.shapes.medium
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = c.accent.copy(alpha = 0.15f), contentColor = c.accent),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Outlined.Download, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Download")
+                Text("Download", fontWeight = FontWeight.Medium)
             }
         }
 
         if (songs.isEmpty()) {
             EmptyLibrary(onImport, onDownload, !isLoading)
         } else {
-            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 20.dp)) {
+            /* Recently added section */
+            if (songs.size > 3) {
+                Text(
+                    "Recently Added",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = c.textPrimary,
+                    modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp)
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val recent = songs.sortedByDescending { it.addedAt }.take(6)
+                    items(recent, key = { it.id }) { song ->
+                        RecentSongCard(song = song, onPlay = { viewModel.play(song) })
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+
+            Text(
+                "All Songs",
+                style = MaterialTheme.typography.titleMedium,
+                color = c.textPrimary,
+                modifier = Modifier.padding(start = 20.dp, bottom = 4.dp)
+            )
+            LazyColumn(
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 items(filtered, key = { it.id }) { song ->
                     SongRow(
                         song,
@@ -549,6 +565,44 @@ fun HomeScreen(
     }
 }
 
+/** Horizontal card for the "Recently Added" row on Home. */
+@Composable
+fun RecentSongCard(song: Song, onPlay: () -> Unit) {
+    val c = MusedColors.current
+    Surface(
+        modifier = Modifier
+            .width(140.dp)
+            .clickable(onClick = onPlay),
+        color = c.card,
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column {
+            Artwork(song, Modifier.fillMaxWidth().height(130.dp))
+            Column(Modifier.padding(10.dp)) {
+                Text(
+                    song.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = c.textPrimary
+                )
+                Text(
+                    song.artist,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSecondary
+                )
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Library Screen
+   ═══════════════════════════════════════════════════════════════ */
+
 @Composable
 fun LibraryScreen(
     songs: List<Song>,
@@ -556,23 +610,42 @@ fun LibraryScreen(
     viewModel: PlayerViewModel,
     onSearchClick: () -> Unit
 ) {
-    Column(Modifier.fillMaxSize().background(AppColors.Midnight)) {
+    val c = MusedColors.current
+    Column(Modifier.fillMaxSize()) {
         TopBar("Library", onSearchClick)
 
         if (songs.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.LibraryMusic, null, Modifier.size(56.dp), tint = AppColors.Accent)
-                    Spacer(Modifier.height(12.dp))
-                    Text("No songs yet", color = AppColors.TextSecondary)
+                    Surface(
+                        shape = CircleShape,
+                        color = c.accent.copy(alpha = 0.10f),
+                        modifier = Modifier.size(72.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Outlined.LibraryMusic, null, Modifier.size(34.dp), tint = c.accent)
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text("No songs yet", color = c.textSecondary, style = MaterialTheme.typography.bodyLarge)
+                    Text("Import or download to get started", color = c.textMuted, style = MaterialTheme.typography.bodySmall)
                 }
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 20.dp)) {
+            Text(
+                "${songs.size} songs",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.textMuted,
+                modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 4.dp)
+            )
+            LazyColumn(
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 items(filtered, key = { it.id }) { song ->
                     SongRow(
                         song,
-                        selected = false,
+                        selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
                         onPlay = { viewModel.play(song) },
                         onDelete = { viewModel.delete(song) }
                     )
@@ -582,58 +655,72 @@ fun LibraryScreen(
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Equalizer Screen
+   ═══════════════════════════════════════════════════════════════ */
+
 @Composable
 fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
+    val c = MusedColors.current
     val equalizerState by viewModel.equalizerState.collectAsStateWithLifecycle()
 
-    Column(Modifier.fillMaxSize().background(AppColors.Midnight)) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
         TopBar("Equalizer", onSearchClick)
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            /* Header card */
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = AppColors.SurfaceElevated,
-                shape = MaterialTheme.shapes.large,
-                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
+                color = c.card,
+                shape = RoundedCornerShape(20.dp)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(20.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column {
-                        Text("Audio Equalizer", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
-                        Text("Live output", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+                        Text("Audio Equalizer", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            if (equalizerState.enabled) "Active • ${equalizerState.presetName}" else "Disabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = c.textSecondary
+                        )
                     }
                     Switch(
                         checked = equalizerState.enabled,
                         onCheckedChange = { viewModel.setEqualizerEnabled(it) },
                         colors = SwitchDefaults.colors(
-                            checkedThumbColor = AppColors.Accent,
-                            checkedTrackColor = AppColors.Accent.copy(alpha = 0.45f),
-                            uncheckedThumbColor = AppColors.TextSecondary,
-                            uncheckedTrackColor = AppColors.Panel
+                            checkedThumbColor = c.accent,
+                            checkedTrackColor = c.accent.copy(alpha = 0.35f),
+                            uncheckedThumbColor = c.textMuted,
+                            uncheckedTrackColor = c.card
                         )
                     )
                 }
             }
 
+            /* Band sliders */
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = AppColors.SurfaceElevated,
-                shape = MaterialTheme.shapes.large,
-                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
+                color = c.card,
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val bands = equalizerState.bandLevels
-                    val labels = listOf("60Hz", "230Hz", "910Hz", "3.6kHz", "14.5kHz")
+                    val labels = listOf("60Hz", "230Hz", "910Hz", "3.6kHz", "14kHz")
 
                     bands.forEachIndexed { index, value ->
                         Column {
@@ -642,17 +729,17 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(labels[index], color = AppColors.TextPrimary, style = MaterialTheme.typography.bodySmall)
-                                Text("${value}%", color = AppColors.Accent, style = MaterialTheme.typography.bodySmall)
+                                Text(labels[index], color = c.textSecondary, style = MaterialTheme.typography.bodySmall)
+                                Text("${value}%", color = c.accent, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
                             }
                             Slider(
                                 value = value.toFloat(),
                                 onValueChange = { viewModel.setBandLevel(index, it.toInt()) },
                                 valueRange = 0f..100f,
                                 colors = SliderDefaults.colors(
-                                    thumbColor = AppColors.Accent,
-                                    activeTrackColor = AppColors.Accent,
-                                    inactiveTrackColor = AppColors.Panel
+                                    thumbColor = c.accent,
+                                    activeTrackColor = c.accent,
+                                    inactiveTrackColor = c.border
                                 )
                             )
                         }
@@ -660,14 +747,14 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
                 }
             }
 
+            /* Presets */
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = AppColors.SurfaceElevated,
-                shape = MaterialTheme.shapes.large,
-                border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.55f))
+                color = c.card,
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Presets", color = AppColors.TextPrimary, style = MaterialTheme.typography.titleSmall)
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Presets", color = c.textPrimary, style = MaterialTheme.typography.titleMedium)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.horizontalScroll(rememberScrollState())
@@ -677,13 +764,15 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
                             FilterChip(
                                 selected = selected,
                                 onClick = { viewModel.applyPreset(preset) },
-                                label = { Text(preset) },
+                                label = { Text(preset, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
+                                shape = RoundedCornerShape(12.dp),
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AppColors.Accent,
-                                    selectedLabelColor = AppColors.Midnight,
-                                    containerColor = AppColors.Panel,
-                                    labelColor = AppColors.TextPrimary
-                                )
+                                    selectedContainerColor = c.accent,
+                                    selectedLabelColor = c.background,
+                                    containerColor = c.cardStrong,
+                                    labelColor = c.textPrimary
+                                ),
+                                border = null
                             )
                         }
                     }
@@ -693,69 +782,176 @@ fun EqualizerScreen(viewModel: PlayerViewModel, onSearchClick: () -> Unit) {
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Profile Screen
+   ═══════════════════════════════════════════════════════════════ */
+
 @Composable
 fun ProfileScreen(
     authState: AuthUiState,
     profileState: ProfileUiState,
-    onSearchClick: () -> Unit,
+    themeKey: String,
+    onThemeChange: (String) -> Unit,
     onLoadProfile: () -> Unit,
     onSaveUsername: (String) -> Unit,
+    onUpdateAvatar: (android.net.Uri) -> Unit,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    val c = MusedColors.current
+
     LaunchedEffect(authState.signedIn) {
         if (authState.signedIn) onLoadProfile()
     }
 
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { onUpdateAvatar(it) }
+    }
+
     var isEditing by rememberSaveable { mutableStateOf(false) }
     var usernameDraft by rememberSaveable { mutableStateOf("") }
+    var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(profileState.username) {
         if (!isEditing) usernameDraft = profileState.username
     }
 
-    Column(Modifier.fillMaxSize().background(AppColors.Midnight)) {
-        TopBar("Profile", onSearchClick)
+    /* Delete account confirmation dialog */
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Account?", color = c.textPrimary) },
+            text = {
+                Text(
+                    "This will permanently delete your account and all associated data. This action cannot be undone.",
+                    color = c.textSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Delete", color = c.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = c.textSecondary)
+                }
+            },
+            containerColor = c.surfaceElevated,
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
 
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (authState.signedIn) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        /* Header */
+        Surface(modifier = Modifier.fillMaxWidth(), color = c.background) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Profile", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = c.textPrimary)
+            }
+        }
+
+        if (authState.signedIn) {
+            /* ─── Profile card ─── */
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                color = c.card,
+                shape = RoundedCornerShape(22.dp)
+            ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val profileAvatarUrl = profileState.avatarUrl ?: authState.avatarUrl
-                    if (!profileAvatarUrl.isNullOrBlank()) {
-                        AsyncImage(
-                            model = profileAvatarUrl,
-                            contentDescription = "Google profile avatar",
-                            modifier = Modifier.size(76.dp).clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Surface(shape = CircleShape, color = AppColors.PanelStrong, modifier = Modifier.size(76.dp)) {
+                    /* Avatar */
+                    val avatarUrl = profileState.avatarUrl ?: authState.avatarUrl
+                    Box(
+                        contentAlignment = Alignment.BottomEnd,
+                        modifier = Modifier.clickable(enabled = !profileState.isSaving) { imagePicker.launch("image/*") }
+                    ) {
+                        if (!avatarUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = avatarUrl,
+                                contentDescription = "Profile photo",
+                                modifier = Modifier
+                                    .size(88.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Surface(shape = CircleShape, color = c.accent.copy(alpha = 0.12f), modifier = Modifier.size(88.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Default.Person, null, Modifier.size(44.dp), tint = c.accent)
+                                }
+                            }
+                        }
+                        
+                        // Edit overlay
+                        Surface(
+                            shape = CircleShape,
+                            color = c.accent,
+                            modifier = Modifier.size(28.dp).offset(x = 4.dp, y = 4.dp),
+                            shadowElevation = 4.dp
+                        ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Person, null, Modifier.size(40.dp), tint = AppColors.Accent)
+                                Icon(Icons.Outlined.Edit, contentDescription = "Edit Profile Picture", Modifier.size(16.dp), tint = c.background)
                             }
                         }
                     }
 
+                    Spacer(Modifier.height(4.dp))
+
+                    /* Display name */
                     Text(
-                        profileState.username.ifBlank { authState.displayName ?: "Google User" },
+                        profileState.username.ifBlank { authState.displayName ?: "MUSED User" },
                         style = MaterialTheme.typography.titleLarge,
-                        color = AppColors.TextPrimary
+                        fontWeight = FontWeight.Bold,
+                        color = c.textPrimary
                     )
+
+                    /* Email */
                     if (!authState.email.isNullOrBlank()) {
-                        Text(authState.email, color = AppColors.TextSecondary)
+                        Text(authState.email, color = c.textSecondary, style = MaterialTheme.typography.bodyMedium)
                     }
 
                     if (profileState.isLoading) {
-                        CircularProgressIndicator(color = AppColors.Accent, modifier = Modifier.size(24.dp))
+                        CircularProgressIndicator(color = c.accent, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                     }
 
                     if (!profileState.error.isNullOrBlank()) {
-                        Text(profileState.error, color = AppColors.AccentStrong)
+                        Text(profileState.error, color = c.error, style = MaterialTheme.typography.bodySmall)
                     }
+                }
+            }
+
+            /* ─── Edit profile section ─── */
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                color = c.card,
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Account", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
 
                     if (isEditing) {
                         OutlinedTextField(
@@ -765,108 +961,164 @@ fun ProfileScreen(
                             label = { Text("Username") },
                             enabled = !profileState.isSaving,
                             modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AppColors.Accent,
-                                unfocusedBorderColor = AppColors.Border,
-                                focusedLabelColor = AppColors.Accent,
-                                unfocusedLabelColor = AppColors.TextSecondary,
-                                focusedTextColor = AppColors.TextPrimary,
-                                unfocusedTextColor = AppColors.TextPrimary
+                                focusedBorderColor = c.accent,
+                                unfocusedBorderColor = c.border,
+                                focusedLabelColor = c.accent,
+                                unfocusedLabelColor = c.textSecondary,
+                                focusedTextColor = c.textPrimary,
+                                unfocusedTextColor = c.textPrimary,
+                                cursorColor = c.accent
                             )
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            TextButton(
-                                onClick = {
-                                    usernameDraft = profileState.username
-                                    isEditing = false
-                                },
+                            OutlinedButton(
+                                onClick = { usernameDraft = profileState.username; isEditing = false },
                                 enabled = !profileState.isSaving,
-                                modifier = Modifier.weight(1f)
-                            ) { Text("Cancel", color = AppColors.TextSecondary) }
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = c.textSecondary),
+                                border = BorderStroke(1.dp, c.border)
+                            ) { Text("Cancel") }
                             Button(
-                                onClick = {
-                                    onSaveUsername(usernameDraft)
-                                    isEditing = false
-                                },
+                                onClick = { onSaveUsername(usernameDraft); isEditing = false },
                                 enabled = usernameDraft.trim().isNotEmpty() && !profileState.isSaving,
                                 modifier = Modifier.weight(1f),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = AppColors.Accent,
-                                    contentColor = AppColors.Midnight
-                                )
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.background)
                             ) {
                                 if (profileState.isSaving) {
-                                    CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
+                                    CircularProgressIndicator(color = c.background, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                                 } else {
-                                    Text("Save")
+                                    Text("Save", fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
                     } else {
                         Button(
-                            onClick = {
-                                usernameDraft = profileState.username
-                                isEditing = true
-                            },
+                            onClick = { usernameDraft = profileState.username; isEditing = true },
                             enabled = !profileState.isLoading,
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AppColors.Accent,
-                                contentColor = AppColors.Midnight
-                            )
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = c.accent.copy(alpha = 0.15f), contentColor = c.accent)
                         ) {
-                            Text("Edit Profile")
+                            Icon(Icons.Outlined.Edit, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Edit Profile", fontWeight = FontWeight.Medium)
                         }
                     }
 
                     Button(
                         onClick = onSignOut,
                         enabled = !profileState.isSaving,
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong, contentColor = AppColors.TextPrimary),
-                        modifier = Modifier.fillMaxWidth()
+                        colors = ButtonDefaults.buttonColors(containerColor = c.cardStrong, contentColor = c.textPrimary),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
+                        Icon(Icons.Outlined.Logout, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text("Sign Out")
                     }
 
                     OutlinedButton(
-                        onClick = { },
+                        onClick = { showDeleteConfirm = true },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.TextMuted),
-                        border = ButtonDefaults.outlinedButtonBorder.copy(
-                            brush = androidx.compose.ui.graphics.SolidColor(AppColors.Border)
-                        )
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = c.error),
+                        border = BorderStroke(1.dp, c.error.copy(alpha = 0.3f))
                     ) {
+                        Icon(Icons.Outlined.DeleteForever, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text("Delete Account")
                     }
                 }
-            } else {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Icon(Icons.Default.Person, null, Modifier.size(64.dp), tint = AppColors.TextSecondary)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Welcome to MUSED", color = AppColors.TextPrimary, style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Sign in to continue to MUSED.", color = AppColors.TextSecondary)
+            }
+
+            /* ─── Theme picker ─── */
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                color = c.card,
+                shape = RoundedCornerShape(22.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text("Appearance", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
+                    Text("Choose your accent color", style = MaterialTheme.typography.bodySmall, color = c.textSecondary)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        BuiltInThemes.values.forEach { palette ->
+                            val isSelected = palette.key == themeKey
+                            Surface(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clickable { onThemeChange(palette.key) },
+                                shape = CircleShape,
+                                color = palette.accent,
+                                border = if (isSelected) BorderStroke(3.dp, c.textPrimary) else null
+                            ) {
+                                if (isSelected) {
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                                        Icon(Icons.Default.Check, null, tint = Color.Black, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+        } else {
+            /* ─── Not signed in ─── */
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+                    Surface(
+                        shape = CircleShape,
+                        color = c.accent.copy(alpha = 0.10f),
+                        modifier = Modifier.size(80.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Person, null, Modifier.size(40.dp), tint = c.accent)
+                        }
+                    }
                     Spacer(Modifier.height(20.dp))
+                    Text("Welcome to MUSED", color = c.textPrimary, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Sign in to access your profile.", color = c.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(24.dp))
 
                     Button(
                         onClick = onGoogleSignIn,
                         enabled = !authState.isLoading,
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.Accent, contentColor = AppColors.Midnight),
-                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.background),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
                         if (authState.isLoading) {
-                            CircularProgressIndicator(color = AppColors.Midnight, modifier = Modifier.size(18.dp))
+                            CircularProgressIndicator(color = c.background, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
                         }
-                        Text("Continue with Google")
+                        Text("Continue with Google", fontWeight = FontWeight.SemiBold)
                     }
 
                     if (!authState.error.isNullOrBlank()) {
                         Spacer(Modifier.height(12.dp))
-                        Text(authState.error, color = AppColors.AccentStrong)
+                        Text(authState.error, color = c.error, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -874,43 +1126,48 @@ fun ProfileScreen(
     }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Shared UI components
+   ═══════════════════════════════════════════════════════════════ */
+
 @Composable
 fun EmptyLibrary(onImport: () -> Unit, onDownload: () -> Unit, enabled: Boolean) {
+    val c = MusedColors.current
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(28.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
             Surface(
-                modifier = Modifier.size(84.dp),
+                modifier = Modifier.size(88.dp),
                 shape = CircleShape,
-                color = AppColors.Accent.copy(alpha = 0.12f)
+                color = c.accent.copy(alpha = 0.10f)
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.LibraryMusic, null, Modifier.size(40.dp), tint = AppColors.Accent)
+                    Icon(Icons.Outlined.LibraryMusic, null, Modifier.size(42.dp), tint = c.accent)
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Text("Your library is quiet", style = MaterialTheme.typography.titleLarge, color = AppColors.TextPrimary)
-            Spacer(Modifier.height(4.dp))
-            Text("Bring in a favorite track to get started", style = MaterialTheme.typography.bodyMedium, color = AppColors.TextSecondary)
             Spacer(Modifier.height(20.dp))
+            Text("Your library is empty", style = MaterialTheme.typography.titleLarge, color = c.textPrimary, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text("Import a file or download from a URL", style = MaterialTheme.typography.bodyMedium, color = c.textSecondary)
+            Spacer(Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = onImport,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.PanelStrong),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Text("Import")
-                }
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = c.card, contentColor = c.textPrimary),
+                    shape = RoundedCornerShape(14.dp)
+                ) { Text("Import") }
                 Button(
                     onClick = onDownload,
                     enabled = enabled,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.Panel),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Text("Download")
-                }
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = c.accent.copy(alpha = 0.15f), contentColor = c.accent),
+                    shape = RoundedCornerShape(14.dp)
+                ) { Text("Download") }
             }
         }
     }
@@ -918,6 +1175,7 @@ fun EmptyLibrary(onImport: () -> Unit, onDownload: () -> Unit, enabled: Boolean)
 
 @Composable
 fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> Unit) {
+    val c = MusedColors.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     var showInfo by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
@@ -925,66 +1183,52 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
     Surface(
         modifier = Modifier
             .clickable(onClick = onPlay)
-            .padding(horizontal = 8.dp, vertical = 5.dp)
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium),
-        color = if (selected) AppColors.PanelStrong else AppColors.SurfaceElevated,
-        shadowElevation = if (selected) 5.dp else 0.dp,
-        border = BorderStroke(1.dp, if (selected) AppColors.Accent.copy(alpha = 0.42f) else AppColors.Border.copy(alpha = 0.35f))
+            .fillMaxWidth(),
+        color = if (selected) c.accent.copy(alpha = 0.10f) else Color.Transparent,
+        shape = RoundedCornerShape(14.dp)
     ) {
-        Box {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Artwork(song, Modifier.size(52.dp))
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextPrimary)
-                        Text("${song.artist} / ${song.album}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Artwork(song, Modifier.size(52.dp))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    song.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = if (selected) c.accent else c.textPrimary
+                )
+                Text(
+                    "${song.artist} • ${song.album}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textSecondary
+                )
+            }
+            Text(formatTime(song.durationMs), style = MaterialTheme.typography.bodySmall, color = c.textMuted)
+            Box {
+                IconButton(onClick = { expanded = true }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = c.textMuted)
                 }
-                Text(formatTime(song.durationMs), style = MaterialTheme.typography.bodySmall, color = AppColors.TextSecondary)
-                Spacer(Modifier.width(8.dp))
-                Box {
-                    IconButton(onClick = { expanded = true }, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = AppColors.TextPrimary)
-                    }
-                    DropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false },
-                        modifier = Modifier.background(AppColors.SurfaceElevated)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Play") },
-                            onClick = {
-                                expanded = false
-                                onPlay()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Add to playlist") },
-                            onClick = {
-                                expanded = false
-                                Toast.makeText(context, "Add to playlist coming soon", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Song info") },
-                            onClick = {
-                                expanded = false
-                                showInfo = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            onClick = {
-                                expanded = false
-                                onDelete()
-                            }
-                        )
-                    }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.background(c.surfaceElevated)
+                ) {
+                    DropdownMenuItem(text = { Text("Play") }, onClick = { expanded = false; onPlay() })
+                    DropdownMenuItem(text = { Text("Add to playlist") }, onClick = {
+                        expanded = false
+                        Toast.makeText(context, "Add to playlist coming soon", Toast.LENGTH_SHORT).show()
+                    })
+                    DropdownMenuItem(text = { Text("Song info") }, onClick = { expanded = false; showInfo = true })
+                    DropdownMenuItem(text = { Text("Delete", color = c.error) }, onClick = { expanded = false; onDelete() })
                 }
             }
         }
@@ -996,229 +1240,60 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
 }
 
 @Composable
+fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
+    val c = MusedColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(song.title, color = c.textPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Artist: ${song.artist}", color = c.textSecondary)
+                Text("Album: ${song.album}", color = c.textSecondary)
+                Text("Duration: ${formatTime(song.durationMs)}", color = c.textSecondary)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close", color = c.accent) }
+        },
+        containerColor = c.surfaceElevated,
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+@Composable
 fun SearchDialog(query: String, onQueryChange: (String) -> Unit, onDismiss: () -> Unit) {
+    val c = MusedColors.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = MaterialTheme.shapes.large,
-            color = AppColors.SurfaceElevated,
-            tonalElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            border = BorderStroke(1.dp, AppColors.Border.copy(alpha = 0.7f))
+            shape = RoundedCornerShape(24.dp),
+            color = c.surfaceElevated,
+            tonalElevation = 0.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Search", style = MaterialTheme.typography.titleMedium, color = AppColors.TextPrimary)
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Search", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search library") },
-                    shape = MaterialTheme.shapes.small,
+                    placeholder = { Text("Search your library…") },
+                    shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AppColors.Accent,
-                        unfocusedBorderColor = AppColors.Border,
-                        cursorColor = AppColors.Accent,
-                        focusedTextColor = AppColors.TextPrimary,
-                        unfocusedTextColor = AppColors.TextPrimary
+                        focusedBorderColor = c.accent,
+                        unfocusedBorderColor = c.border,
+                        cursorColor = c.accent,
+                        focusedTextColor = c.textPrimary,
+                        unfocusedTextColor = c.textPrimary
                     )
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) {
-                        Text("Close")
+                        Text("Close", color = c.accent)
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(song.title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Artist: ${song.artist}")
-                Text("Album: ${song.album}")
-                Text("Duration: ${formatTime(song.durationMs)}")
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        }
-    )
-}
-
-@Composable
-fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier
-            .shadow(12.dp)
-            .clickable(onClick = onTap),
-        color = AppColors.SurfaceElevated,
-        border = BorderStroke(1.dp, AppColors.Accent.copy(alpha = 0.24f))
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(AppColors.SurfaceElevated)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            state.current?.let { song ->
-                Artwork(song, Modifier.size(42.dp))
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = AppColors.TextPrimary, style = MaterialTheme.typography.bodyMedium)
-                    Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = AppColors.TextPrimary.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
-                }
-                IconButton(
-                    onClick = { viewModel.toggle() },
-                    Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        null,
-                        tint = AppColors.TextPrimary
-                    )
-                }
-                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Open player", tint = AppColors.TextMuted, modifier = Modifier.size(20.dp))
-            }
-        }
-    }
-}
-
-@Composable
-fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = AppColors.Midnight
-        ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .background(AppColors.Midnight)
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.KeyboardArrowDown, null, tint = AppColors.TextPrimary)
-                    }
-                    Text("NOW PLAYING", color = AppColors.TextSecondary, style = MaterialTheme.typography.labelLarge, letterSpacing = 1.5.sp)
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.MoreVert, null, tint = AppColors.TextPrimary)
-                    }
-                }
-
-                state.current?.let { song ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .padding(horizontal = 12.dp)
-                            .clip(MaterialTheme.shapes.large)
-                            .shadow(16.dp),
-                        color = AppColors.SurfaceElevated
-                    ) {
-                        Artwork(song, Modifier.fillMaxSize())
-                    }
-
-                    Spacer(Modifier.height(24.dp))
-
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(song.title, style = MaterialTheme.typography.headlineSmall, color = AppColors.TextPrimary, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        Spacer(Modifier.height(4.dp))
-                        Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = AppColors.TextSecondary)
-                    }
-
-                    Spacer(Modifier.height(24.dp))
-
-                    Column(Modifier.fillMaxWidth()) {
-                        Slider(
-                            value = state.positionMs.toFloat(),
-                            onValueChange = { viewModel.seekTo(it.toLong()) },
-                            valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat(),
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = AppColors.TextPrimary,
-                                activeTrackColor = AppColors.TextPrimary,
-                                inactiveTrackColor = AppColors.TextPrimary.copy(alpha = 0.2f)
-                            )
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(formatTime(state.positionMs), style = MaterialTheme.typography.bodySmall, color = AppColors.TextPrimary)
-                            Text(formatTime(state.durationMs), style = MaterialTheme.typography.bodySmall, color = AppColors.TextPrimary)
-                        }
-                    }
-
-                    Spacer(Modifier.height(24.dp))
-
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { viewModel.toggleShuffle() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Default.Shuffle, null, tint = if (state.shuffleEnabled) AppColors.TextPrimary else AppColors.TextPrimary.copy(alpha = 0.5f), modifier = Modifier.size(26.dp))
-                        }
-                        IconButton(onClick = { viewModel.previous() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Default.SkipPrevious, null, tint = AppColors.TextPrimary, modifier = Modifier.size(32.dp))
-                        }
-                        Surface(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .clip(RoundedCornerShape(32.dp)),
-                            color = AppColors.TextPrimary
-                        ) {
-                            IconButton(onClick = { viewModel.toggle() }, Modifier.fillMaxSize()) {
-                                Icon(
-                                    if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    null,
-                                    tint = AppColors.Midnight,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
-                        }
-                        IconButton(onClick = { viewModel.next() }, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.Default.SkipNext, null, tint = AppColors.TextPrimary, modifier = Modifier.size(32.dp))
-                        }
-                        IconButton(onClick = { viewModel.cycleRepeatMode() }, modifier = Modifier.size(48.dp)) {
-                            Text(
-                                when (state.repeatMode) {
-                                    RepeatMode.OFF -> "↻"
-                                    RepeatMode.ONE -> "↻1"
-                                    RepeatMode.ALL -> "↻"
-                                },
-                                color = if (state.repeatMode == RepeatMode.OFF) AppColors.TextPrimary.copy(alpha = 0.5f) else AppColors.TextPrimary,
-                                style = MaterialTheme.typography.headlineSmall
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun Artwork(song: Song, modifier: Modifier = Modifier) {
-    val bitmap = remember(song.artworkPath) {
-        song.artworkPath?.let { BitmapFactory.decodeFile(it)?.asImageBitmap() }
-    }
-    if (bitmap != null) {
-        Image(bitmap, null, modifier.clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
-    } else {
-        Surface(modifier.clip(RoundedCornerShape(10.dp)), color = AppColors.AccentStrong) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Icon(Icons.Default.MusicNote, null, tint = AppColors.Midnight)
             }
         }
     }
@@ -1226,31 +1301,269 @@ fun Artwork(song: Song, modifier: Modifier = Modifier) {
 
 @Composable
 fun DownloadDialog(onDismiss: () -> Unit, isLoading: Boolean = false, onDownload: (String) -> Unit) {
+    val c = MusedColors.current
     var url by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = if (!isLoading) onDismiss else { {} },
-        title = { Text("Download audio") },
+        title = { Text("Download Audio", color = c.textPrimary) },
         text = {
             OutlinedTextField(
                 url, { url = it },
                 label = { Text("Audio or YouTube URL") },
                 singleLine = true,
                 enabled = !isLoading,
-                shape = MaterialTheme.shapes.small,
-                textStyle = LocalTextStyle.current.copy(color = AppColors.TextPrimary)
+                shape = RoundedCornerShape(14.dp),
+                textStyle = LocalTextStyle.current.copy(color = c.textPrimary),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = c.accent,
+                    unfocusedBorderColor = c.border,
+                    focusedLabelColor = c.accent,
+                    unfocusedLabelColor = c.textSecondary,
+                    cursorColor = c.accent
+                )
             )
         },
         confirmButton = {
             TextButton(onClick = { onDownload(url) }, enabled = url.startsWith("http") && !isLoading) {
-                Text("Download")
+                Text("Download", color = c.accent)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !isLoading) {
-                Text("Cancel")
+                Text("Cancel", color = c.textSecondary)
             }
-        }
+        },
+        containerColor = c.surfaceElevated,
+        shape = RoundedCornerShape(24.dp)
     )
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Mini Player
+   ═══════════════════════════════════════════════════════════════ */
+
+@Composable
+fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Unit, modifier: Modifier = Modifier) {
+    val c = MusedColors.current
+    Surface(
+        modifier = modifier.clickable(onClick = onTap),
+        color = c.surface,
+        tonalElevation = 0.dp
+    ) {
+        Column {
+            /* Progress bar at top */
+            if (state.durationMs > 0) {
+                LinearProgressIndicator(
+                    progress = { (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = c.accent,
+                    trackColor = c.border
+                )
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                state.current?.let { song ->
+                    Artwork(song, Modifier.size(44.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textPrimary, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.textSecondary, style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = { viewModel.previous() }, Modifier.size(36.dp)) {
+                        Icon(Icons.Default.SkipPrevious, null, tint = c.textSecondary, modifier = Modifier.size(22.dp))
+                    }
+                    IconButton(onClick = { viewModel.toggle() }, Modifier.size(40.dp)) {
+                        Icon(
+                            if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            null,
+                            tint = c.textPrimary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    IconButton(onClick = { viewModel.next() }, Modifier.size(36.dp)) {
+                        Icon(Icons.Default.SkipNext, null, tint = c.textSecondary, modifier = Modifier.size(22.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Full-screen Player
+   ═══════════════════════════════════════════════════════════════ */
+
+@Composable
+fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss: () -> Unit) {
+    val c = MusedColors.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = c.background
+        ) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                /* Top bar */
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.KeyboardArrowDown, null, tint = c.textSecondary, modifier = Modifier.size(28.dp))
+                    }
+                    Text("Now Playing", color = c.textSecondary, style = MaterialTheme.typography.labelLarge)
+                    IconButton(onClick = {}) {
+                        Icon(Icons.Default.MoreVert, null, tint = c.textSecondary, modifier = Modifier.size(22.dp))
+                    }
+                }
+
+                state.current?.let { song ->
+                    Spacer(Modifier.height(16.dp))
+
+                    /* Large artwork */
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .padding(horizontal = 8.dp),
+                        color = c.card,
+                        shape = RoundedCornerShape(24.dp),
+                        shadowElevation = 16.dp
+                    ) {
+                        Artwork(song, Modifier.fillMaxSize())
+                    }
+
+                    Spacer(Modifier.height(28.dp))
+
+                    /* Title & artist */
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            song.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = c.textPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = c.textSecondary)
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    /* Seek bar */
+                    Column(Modifier.fillMaxWidth()) {
+                        Slider(
+                            value = state.positionMs.toFloat(),
+                            onValueChange = { viewModel.seekTo(it.toLong()) },
+                            valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat(),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = SliderDefaults.colors(
+                                thumbColor = c.accent,
+                                activeTrackColor = c.accent,
+                                inactiveTrackColor = c.border
+                            )
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(formatTime(state.positionMs), style = MaterialTheme.typography.bodySmall, color = c.textMuted)
+                            Text(formatTime(state.durationMs), style = MaterialTheme.typography.bodySmall, color = c.textMuted)
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+
+                    /* Controls */
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { viewModel.toggleShuffle() }, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                Icons.Default.Shuffle, null,
+                                tint = if (state.shuffleEnabled) c.accent else c.textMuted,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.previous() }, modifier = Modifier.size(52.dp)) {
+                            Icon(Icons.Default.SkipPrevious, null, tint = c.textPrimary, modifier = Modifier.size(32.dp))
+                        }
+
+                        /* Play/Pause circle */
+                        Surface(
+                            modifier = Modifier.size(68.dp),
+                            shape = CircleShape,
+                            color = c.accent
+                        ) {
+                            IconButton(onClick = { viewModel.toggle() }, Modifier.fillMaxSize()) {
+                                Icon(
+                                    if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    null,
+                                    tint = c.background,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                        }
+
+                        IconButton(onClick = { viewModel.next() }, modifier = Modifier.size(52.dp)) {
+                            Icon(Icons.Default.SkipNext, null, tint = c.textPrimary, modifier = Modifier.size(32.dp))
+                        }
+                        IconButton(onClick = { viewModel.cycleRepeatMode() }, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                when (state.repeatMode) {
+                                    RepeatMode.ONE -> Icons.Default.RepeatOne
+                                    else -> Icons.Default.Repeat
+                                },
+                                null,
+                                tint = if (state.repeatMode == RepeatMode.OFF) c.textMuted else c.accent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Artwork helper
+   ═══════════════════════════════════════════════════════════════ */
+
+@Composable
+fun Artwork(song: Song, modifier: Modifier = Modifier) {
+    val c = MusedColors.current
+    val bitmap = remember(song.artworkPath) {
+        song.artworkPath?.let { BitmapFactory.decodeFile(it)?.asImageBitmap() }
+    }
+    if (bitmap != null) {
+        Image(bitmap, null, modifier.clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+    } else {
+        Surface(modifier.clip(RoundedCornerShape(12.dp)), color = c.accent.copy(alpha = 0.15f)) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                Icon(Icons.Default.MusicNote, null, tint = c.accent.copy(alpha = 0.6f))
+            }
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Utilities
+   ═══════════════════════════════════════════════════════════════ */
 
 private fun formatTime(ms: Long): String = "%d:%02d".format(ms / 60_000, (ms / 1_000) % 60)

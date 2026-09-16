@@ -17,6 +17,8 @@ import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.auth.user.UserSession
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.storage.Storage
+import io.github.jan.supabase.storage.storage
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import android.net.Uri
 
 data class AuthUiState(
     val isLoading: Boolean = false,
@@ -64,6 +67,7 @@ class SupabaseAuthManager(private val context: Context) {
     ) {
         install(Auth)
         install(Postgrest)
+        install(Storage)
     }
 
     private val _authState = MutableStateFlow(AuthUiState())
@@ -104,7 +108,6 @@ class SupabaseAuthManager(private val context: Context) {
                 ?: error("Supabase did not return an authenticated session.")
             val state = stateFromSession(session).copy(
                 displayName = account.displayName,
-                email = account.email,
                 avatarUrl = account.photoUrl?.toString()
             )
             _authState.value = state
@@ -187,6 +190,50 @@ class SupabaseAuthManager(private val context: Context) {
             _profileState.value = _profileState.value.copy(
                 isSaving = false,
                 error = friendlyProfileError()
+            )
+        }
+    }
+
+    suspend fun uploadProfilePicture(uri: Uri) = withContext(Dispatchers.IO) {
+        val userId = supabase.auth.currentSessionOrNull()?.user?.id
+        if (userId.isNullOrBlank()) {
+            _profileState.value = _profileState.value.copy(error = friendlyProfileError())
+            return@withContext
+        }
+
+        _profileState.value = _profileState.value.copy(isSaving = true, error = null)
+        runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: error("Could not read image file")
+            
+            // Upload to Supabase Storage
+            val bucket = supabase.storage["avatars"]
+            val path = "$userId/avatar.jpg"
+            bucket.upload(path, bytes) {
+                upsert = true
+            }
+            
+            // Get public URL
+            val publicUrl = bucket.publicUrl(path)
+            
+            // Update profile table
+            supabase.from("profiles").update(
+                buildJsonObject { put("avatar_url", publicUrl) }
+            ) {
+                filter { eq("id", userId) }
+            }
+            publicUrl
+        }.onSuccess { publicUrl ->
+            _profileState.value = _profileState.value.copy(
+                isSaving = false,
+                avatarUrl = publicUrl,
+                error = null
+            )
+        }.onFailure { throwable ->
+            Log.e("SupabaseAuthManager", "Could not upload profile picture", throwable)
+            _profileState.value = _profileState.value.copy(
+                isSaving = false,
+                error = "Failed to upload picture. Please try again."
             )
         }
     }
