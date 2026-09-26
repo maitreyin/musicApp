@@ -15,8 +15,10 @@ class MusicApplication : Application() {
     }
 
     val repository: SongRepository by lazy {
-        val database = Room.databaseBuilder(this, SongDatabase::class.java, "music.db").build()
-        SongRepository(this, database.songDao())
+        val database = Room.databaseBuilder(this, SongDatabase::class.java, "music.db")
+            .addMigrations(SongDatabase.MIGRATION_1_2)
+            .build()
+        SongRepository(this, database.songDao(), authManager.authState)
     }
 
     val authManager: SupabaseAuthManager by lazy {

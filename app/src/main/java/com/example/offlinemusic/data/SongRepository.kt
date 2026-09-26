@@ -3,8 +3,15 @@ package com.example.offlinemusic.data
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import com.example.offlinemusic.auth.AuthUiState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.NewPipe
 import java.io.File
@@ -12,15 +19,24 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 
-class SongRepository(private val context: Context, private val dao: SongDao) {
-    val songs: Flow<List<Song>> = dao.observeAll()
+@OptIn(ExperimentalCoroutinesApi::class)
+class SongRepository(
+    private val context: Context,
+    private val dao: SongDao,
+    private val authState: StateFlow<AuthUiState>
+) {
+    val userId: Flow<String?> = authState.map { it.userId }.distinctUntilChanged()
+    val songs: Flow<List<Song>> = userId.flatMapLatest { userId ->
+        userId?.let(dao::observeAll) ?: flowOf(emptyList())
+    }
 
     /** Copies an audio Uri into filesDir/audio, which is private to this app. */
     suspend fun import(uri: Uri): Song = withContext(Dispatchers.IO) {
+        val userId = requireCurrentUserId()
         val input = context.contentResolver.openInputStream(uri)
             ?: error("Unable to read the selected audio file")
         try {
-            importStream(input)
+            importStream(input, userId)
         } finally {
             input.close()
         }
@@ -28,6 +44,7 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
 
     /** Downloads a direct audio URL or resolves a YouTube URL into an audio stream. */
     suspend fun download(url: String): Song = withContext(Dispatchers.IO) {
+        val userId = requireCurrentUserId()
         try {
             val source = if (isYouTubeUrl(url)) {
                 try {
@@ -41,7 +58,7 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
             }
             val input = openConnection(source.audioUrl).inputStream
             try {
-                importStream(input, source.metadata)
+                importStream(input, userId, source.metadata)
             } finally {
                 input.close()
             }
@@ -51,45 +68,64 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
         }
     }
 
-    private suspend fun importStream(input: java.io.InputStream, metadata: DownloadMetadata? = null): Song {
+    private suspend fun importStream(
+        input: java.io.InputStream,
+        userId: String,
+        metadata: DownloadMetadata? = null
+    ): Song {
         val audioDir = File(context.filesDir, "audio").apply { mkdirs() }
         val id = UUID.randomUUID().toString()
         val output = File(audioDir, "$id.audio")
-        output.outputStream().use(input::copyTo)
-        var downloadedArtwork: File? = null
+        var artworkFile: File? = null
+        var retriever: MediaMetadataRetriever? = null
         return try {
-            val meta = MediaMetadataRetriever().apply { setDataSource(output.absolutePath) }
+            output.outputStream().use(input::copyTo)
+            val meta = MediaMetadataRetriever().also {
+                retriever = it
+                it.setDataSource(output.absolutePath)
+            }
             val embeddedArtwork = meta.embeddedPicture?.let { bytes ->
                 File(context.filesDir, "artwork").apply { mkdirs() }.let { dir ->
-                    File(dir, "$id.jpg").also { it.writeBytes(bytes) }.absolutePath
+                    File(dir, "$id.jpg").also {
+                        artworkFile = it
+                        it.writeBytes(bytes)
+                    }.absolutePath
                 }
             }
             val artwork = embeddedArtwork ?: metadata?.artworkUrl?.let { artworkUrl ->
-                runCatching {
+                try {
                     File(context.filesDir, "artwork").apply { mkdirs() }.let { directory ->
                         File(directory, "$id.jpg").also { file ->
-                            downloadedArtwork = file
+                            artworkFile = file
                             openConnection(artworkUrl).inputStream.use { input ->
                                 file.outputStream().use(input::copyTo)
                             }
                         }.absolutePath
                     }
-                }.onFailure { e ->
+                } catch (e: Exception) {
+                    artworkFile?.delete()
+                    artworkFile = null
                     android.util.Log.w("SongRepository", "Failed to download artwork from: $artworkUrl", e)
-                }.getOrNull()
+                    null
+                }
             }
             Song(
                 id = id,
+                userId = userId,
                 title = metadata?.title.orEmpty().ifBlank { meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" } },
                 artist = metadata?.artist.orEmpty().ifBlank { meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" } },
                 album = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
                 durationMs = metadata?.durationMs ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L,
                 localPath = output.absolutePath,
                 artworkPath = artwork
-            ).also { dao.upsert(it); meta.release() }
+            ).also { dao.upsert(it) }
         } catch (error: Exception) {
             android.util.Log.e("SongRepository", "Failed to import stream, cleaning up files", error)
-            output.delete(); downloadedArtwork?.delete(); throw error
+            output.delete()
+            artworkFile?.delete()
+            throw error
+        } finally {
+            retriever?.release()
         }
     }
 
@@ -204,6 +240,17 @@ class SongRepository(private val context: Context, private val dao: SongDao) {
     private data class DownloadMetadata(val title: String?, val artist: String?, val durationMs: Long?, val artworkUrl: String?)
 
     suspend fun delete(song: Song) = withContext(Dispatchers.IO) {
-        File(song.localPath).delete(); song.artworkPath?.let { File(it).delete() }; dao.delete(song.id)
+        val userId = requireCurrentUserId()
+        check(song.userId == userId) { "Cannot delete a song owned by another account" }
+        dao.delete(song.id, userId)
+        listOfNotNull(song.localPath, song.artworkPath).forEach { path ->
+            val file = File(path)
+            if (file.exists() && !file.delete()) {
+                android.util.Log.w("SongRepository", "Could not remove deleted song file: $path")
+            }
+        }
     }
+
+    private fun requireCurrentUserId(): String =
+        authState.value.userId ?: error("Sign in before changing the music library")
 }

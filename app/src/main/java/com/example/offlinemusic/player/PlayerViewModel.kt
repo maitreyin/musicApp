@@ -72,6 +72,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publish()
             override fun onPlaybackStateChanged(playbackState: Int) = publish()
         })
+        // A playing queue is also account-owned. Stop it before a different account's library
+        // becomes observable so a switch cannot continue exposing the previous user's music.
+        viewModelScope.launch {
+            var previousUserId: String? = null
+            repository.userId.collect { userId ->
+                if (previousUserId != userId) {
+                    player.stop()
+                    player.clearMediaItems()
+                    publish()
+                    previousUserId = userId
+                }
+            }
+        }
         viewModelScope.launch { while (isActive) { publish(); delay(500) } }
     }
 

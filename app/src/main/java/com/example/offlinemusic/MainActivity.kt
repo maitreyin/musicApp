@@ -339,6 +339,9 @@ fun MusicApp(
                     onSignOut = {
                         val scope = (context as? ComponentActivity)?.lifecycleScope
                         scope?.launch { authManager.signOut() }
+                    },
+                    onDeleteAccount = {
+                        lifecycleScope?.launch { authManager.deleteAccount() }
                     }
                 )
             }
@@ -796,7 +799,8 @@ fun ProfileScreen(
     onSaveUsername: (String) -> Unit,
     onUpdateAvatar: (android.net.Uri) -> Unit,
     onGoogleSignIn: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    onDeleteAccount: () -> Unit
 ) {
     val c = MusedColors.current
 
@@ -828,7 +832,10 @@ fun ProfileScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDeleteAccount()
+                }) {
                     Text("Delete", color = c.error, fontWeight = FontWeight.Bold)
                 }
             },

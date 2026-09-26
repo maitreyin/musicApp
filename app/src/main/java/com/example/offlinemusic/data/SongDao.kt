@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SongDao {
-    @Query("SELECT * FROM songs ORDER BY title COLLATE NOCASE") fun observeAll(): Flow<List<Song>>
+    @Query("SELECT * FROM songs WHERE user_id = :userId ORDER BY title COLLATE NOCASE")
+    fun observeAll(userId: String): Flow<List<Song>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(song: Song)
-    @Query("DELETE FROM songs WHERE id = :id") suspend fun delete(id: String)
+    @Query("DELETE FROM songs WHERE id = :id AND user_id = :userId")
+    suspend fun delete(id: String, userId: String)
 }
