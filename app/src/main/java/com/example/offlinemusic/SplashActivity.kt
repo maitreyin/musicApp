@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.example.offlinemusic.ui.theme.MusedColors
 import com.example.offlinemusic.ui.theme.ThemeManager
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class SplashActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,27 +33,35 @@ class SplashActivity : ComponentActivity() {
             val palette = remember { themeManager.resolve() }
 
             MusicTheme(palette) {
-                SplashScreen(onSplashComplete = {
-                    startActivity(Intent(this, MainActivity::class.java))
-                    finish()
-                })
+                SplashScreen(
+                    authManager = (application as MusicApplication).authManager,
+                    onSplashComplete = {
+                        startActivity(Intent(this, MainActivity::class.java))
+                        finish()
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun SplashScreen(onSplashComplete: () -> Unit) {
+fun SplashScreen(
+    authManager: com.example.offlinemusic.auth.SupabaseAuthManager,
+    onSplashComplete: () -> Unit
+) {
     val c = MusedColors.current
     var showContent by remember { mutableStateOf(false) }
     var showTagline by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        val authJob = launch { authManager.restoreSignedInState() }
         delay(300)
         showContent = true
         delay(1500)
         showTagline = true
         delay(1500)
+        authJob.join()
         onSplashComplete()
     }
 

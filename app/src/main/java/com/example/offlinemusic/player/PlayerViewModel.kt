@@ -96,7 +96,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         publish()
     }
 
-    fun toggle() { if (player.isPlaying) player.pause() else player.play(); publish() }
+    fun toggle() {
+        if (player.mediaItemCount == 0) {
+            val song = currentSong() ?: return
+            play(song)
+        } else {
+            if (player.isPlaying) player.pause() else player.play()
+            publish()
+        }
+    }
     fun seekTo(positionMs: Long) { player.seekTo(positionMs); publish() }
     fun previous() { player.seekToPreviousMediaItem(); publish() }
     fun next() { player.seekToNextMediaItem(); publish() }

@@ -13,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -22,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -187,7 +189,7 @@ fun MusicApp(
     val lifecycleScope = (context as? ComponentActivity)?.lifecycleScope
     val startupScreen = if (authState.signedIn) Screen.HOME else Screen.AUTH
 
-    LaunchedEffect(Unit) { authManager.restoreSignedInState() }
+    // restoreSignedInState is now handled in SplashActivity
 
     val googleSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val scope = (context as? ComponentActivity)?.lifecycleScope ?: return@rememberLauncherForActivityResult
@@ -1428,9 +1430,33 @@ fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Un
 @Composable
 fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss: () -> Unit) {
     val c = MusedColors.current
+    var showMenu by remember { mutableStateOf(false) }
+    var showEdit by remember { mutableStateOf(false) }
+    var showInfo by remember { mutableStateOf(false) }
+
+    // Track cumulative horizontal drag to trigger skip
+    var dragAccumulator by remember { mutableStateOf(0f) }
+    val swipeThreshold = 120f
+
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            when {
+                                dragAccumulator < -swipeThreshold -> viewModel.next()
+                                dragAccumulator > swipeThreshold -> viewModel.previous()
+                            }
+                            dragAccumulator = 0f
+                        },
+                        onDragCancel = { dragAccumulator = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            dragAccumulator += dragAmount
+                        }
+                    )
+                },
             color = c.background
         ) {
             Column(
@@ -1440,7 +1466,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                /* Top bar */
+                /* ── Top bar ── */
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1450,15 +1476,49 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                         Icon(Icons.Default.KeyboardArrowDown, null, tint = c.textSecondary, modifier = Modifier.size(28.dp))
                     }
                     Text("Now Playing", color = c.textSecondary, style = MaterialTheme.typography.labelLarge)
-                    IconButton(onClick = {}) {
-                        Icon(Icons.Default.MoreVert, null, tint = c.textSecondary, modifier = Modifier.size(22.dp))
+
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, null, tint = c.textSecondary, modifier = Modifier.size(22.dp))
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            containerColor = c.surfaceElevated
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Song info", color = c.textPrimary) },
+                                onClick = { showMenu = false; showInfo = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Edit", color = c.textPrimary) },
+                                onClick = { showMenu = false; showEdit = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Play next", color = c.textPrimary) },
+                                onClick = {
+                                    showMenu = false
+                                    state.current?.let { viewModel.next() }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete", color = c.error) },
+                                onClick = {
+                                    showMenu = false
+                                    state.current?.let { song ->
+                                        viewModel.delete(song)
+                                        onDismiss()
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
 
                 state.current?.let { song ->
                     Spacer(Modifier.height(16.dp))
 
-                    /* Large artwork */
+                    /* ── Large artwork ── */
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1473,7 +1533,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
 
                     Spacer(Modifier.height(28.dp))
 
-                    /* Title & artist */
+                    /* ── Title & artist ── */
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                         Text(
                             song.title,
@@ -1490,7 +1550,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
 
                     Spacer(Modifier.height(24.dp))
 
-                    /* Seek bar */
+                    /* ── Seek bar ── */
                     Column(Modifier.fillMaxWidth()) {
                         Slider(
                             value = state.positionMs.toFloat(),
@@ -1511,7 +1571,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
 
                     Spacer(Modifier.height(16.dp))
 
-                    /* Controls */
+                    /* ── Controls ── */
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
@@ -1565,7 +1625,21 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
             }
         }
     }
+
+    /* ── Dialogs triggered from three-dot menu ── */
+    val song = state.current
+    if (showInfo && song != null) {
+        SongInfoDialog(song, onDismiss = { showInfo = false }, onEdit = { showInfo = false; showEdit = true })
+    }
+    if (showEdit && song != null) {
+        com.example.offlinemusic.ui.EditSongDialog(
+            song = song,
+            onDismiss = { showEdit = false },
+            onSave = { viewModel.update(it) }
+        )
+    }
 }
+
 
 /* ═══════════════════════════════════════════════════════════════
    Artwork helper
