@@ -12,6 +12,7 @@ data class Song(
     val title: String,
     val artist: String,
     val album: String,
+    val genre: String = "Unknown genre",
     val durationMs: Long,
     /** Absolute path below the app's filesDir/audio directory. Never a public Downloads path. */
     val localPath: String,

@@ -5,7 +5,7 @@ import androidx.room.migration.Migration
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Song::class], version = 2, exportSchema = false)
+@Database(entities = [Song::class], version = 3, exportSchema = false)
 abstract class SongDatabase : RoomDatabase() {
     abstract fun songDao(): SongDao
 
@@ -20,6 +20,13 @@ abstract class SongDatabase : RoomDatabase() {
                     "ALTER TABLE songs ADD COLUMN user_id TEXT NOT NULL DEFAULT '__unassigned_legacy_song__'"
                 )
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_songs_user_id ON songs(user_id)")
+            }
+        }
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE songs ADD COLUMN genre TEXT NOT NULL DEFAULT 'Unknown genre'"
+                )
             }
         }
     }

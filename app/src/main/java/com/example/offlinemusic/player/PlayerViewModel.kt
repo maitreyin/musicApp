@@ -146,6 +146,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun delete(song: Song) { if (currentSong()?.id == song.id) player.stop(); viewModelScope.launch { repository.delete(song) } }
+    fun update(song: Song) { viewModelScope.launch { repository.update(song) } }
 
     private fun currentSong() = songs.value.getOrNull(player.currentMediaItemIndex)
 

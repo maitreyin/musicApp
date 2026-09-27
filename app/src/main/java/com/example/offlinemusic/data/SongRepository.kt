@@ -19,6 +19,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 
+data class SongMetadata(
+    val title: String,
+    val artist: String,
+    val album: String,
+    val genre: String,
+    val durationMs: Long? = null,
+    val artworkUrl: String? = null
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class SongRepository(
     private val context: Context,
@@ -30,13 +39,40 @@ class SongRepository(
         userId?.let(dao::observeAll) ?: flowOf(emptyList())
     }
 
+    /** Extracts metadata from a local audio Uri. */
+    suspend fun extractMetadata(uri: Uri): SongMetadata = withContext(Dispatchers.IO) {
+        val meta = MediaMetadataRetriever()
+        try {
+            // Write to a temporary file since setDataSource with Uri can be flaky without a FileDescriptor
+            val input = context.contentResolver.openInputStream(uri) ?: error("Unable to read file")
+            val tempFile = File.createTempFile("meta", ".tmp", context.cacheDir)
+            tempFile.outputStream().use { input.copyTo(it) }
+            meta.setDataSource(tempFile.absolutePath)
+            val durationStr = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            
+            val result = SongMetadata(
+                title = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: "Unknown title",
+                artist = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "Unknown artist",
+                album = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "Unknown album",
+                genre = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE) ?: "Unknown genre",
+                durationMs = durationStr?.toLongOrNull()
+            )
+            tempFile.delete()
+            result
+        } catch (e: Exception) {
+            SongMetadata("Unknown title", "Unknown artist", "Unknown album", "Unknown genre")
+        } finally {
+            meta.release()
+        }
+    }
+
     /** Copies an audio Uri into filesDir/audio, which is private to this app. */
-    suspend fun import(uri: Uri): Song = withContext(Dispatchers.IO) {
+    suspend fun import(uri: Uri, metadata: SongMetadata? = null): Song = withContext(Dispatchers.IO) {
         val userId = requireCurrentUserId()
         val input = context.contentResolver.openInputStream(uri)
             ?: error("Unable to read the selected audio file")
         try {
-            importStream(input, userId)
+            importStream(input, userId, metadata)
         } finally {
             input.close()
         }
@@ -71,7 +107,7 @@ class SongRepository(
     private suspend fun importStream(
         input: java.io.InputStream,
         userId: String,
-        metadata: DownloadMetadata? = null
+        metadata: SongMetadata? = null
     ): Song {
         val audioDir = File(context.filesDir, "audio").apply { mkdirs() }
         val id = UUID.randomUUID().toString()
@@ -112,9 +148,10 @@ class SongRepository(
             Song(
                 id = id,
                 userId = userId,
-                title = metadata?.title.orEmpty().ifBlank { meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" } },
-                artist = metadata?.artist.orEmpty().ifBlank { meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" } },
-                album = meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
+                title = metadata?.title?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" },
+                artist = metadata?.artist?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" },
+                album = metadata?.album?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
+                genre = metadata?.genre?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE).orEmpty().ifBlank { "Unknown genre" },
                 durationMs = metadata?.durationMs ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L,
                 localPath = output.absolutePath,
                 artworkPath = artwork
@@ -162,9 +199,11 @@ class SongRepository(
                     
                     return DownloadSource(
                         audioUrl = streamUrl,
-                        metadata = DownloadMetadata(
+                        metadata = SongMetadata(
                             title = extractor.name,
                             artist = extractor.uploaderName,
+                            album = "Unknown album",
+                            genre = "Unknown genre",
                             durationMs = extractor.length * 1_000,
                             artworkUrl = extractor.thumbnails.lastOrNull()?.url
                         )
@@ -193,9 +232,11 @@ class SongRepository(
                     
                     return DownloadSource(
                         audioUrl = streamUrl,
-                        metadata = DownloadMetadata(
+                        metadata = SongMetadata(
                             title = extractor.name,
                             artist = extractor.uploaderName,
+                            album = "Unknown album",
+                            genre = "Unknown genre",
                             durationMs = extractor.length * 1_000,
                             artworkUrl = extractor.thumbnails.lastOrNull()?.url
                         )
@@ -236,8 +277,7 @@ class SongRepository(
         URL(url).host.lowercase().let { host -> host == "youtu.be" || host.endsWith(".youtube.com") || host == "youtube.com" }
     }.getOrDefault(false)
 
-    private data class DownloadSource(val audioUrl: String, val metadata: DownloadMetadata? = null)
-    private data class DownloadMetadata(val title: String?, val artist: String?, val durationMs: Long?, val artworkUrl: String?)
+    private data class DownloadSource(val audioUrl: String, val metadata: SongMetadata? = null)
 
     suspend fun delete(song: Song) = withContext(Dispatchers.IO) {
         val userId = requireCurrentUserId()
@@ -249,6 +289,12 @@ class SongRepository(
                 android.util.Log.w("SongRepository", "Could not remove deleted song file: $path")
             }
         }
+    }
+
+    suspend fun update(song: Song) = withContext(Dispatchers.IO) {
+        val userId = requireCurrentUserId()
+        check(song.userId == userId) { "Cannot update a song owned by another account" }
+        dao.upsert(song)
     }
 
     private fun requireCurrentUserId(): String =

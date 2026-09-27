@@ -65,22 +65,29 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val viewModel: PlayerViewModel by viewModels()
-    private val importAudio = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@registerForActivityResult
-        lifecycleScope.launch {
-            runCatching { (application as MusicApplication).repository.import(uri) }
-                .onFailure { e -> android.util.Log.e("MainActivity", "Import failed", e) }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val themeManager = remember { ThemeManager(this) }
             var themeKey by remember { mutableStateOf(themeManager.selectedKey()) }
             val palette = remember(themeKey) { BuiltInThemes[themeKey] ?: themeManager.resolve() }
+            
+            var importUris by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
+            val importAudio = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+                if (uris.isNotEmpty()) {
+                    importUris = uris
+                }
+            }
 
             MusicTheme(palette) {
+                if (importUris.isNotEmpty()) {
+                    com.example.offlinemusic.ui.ImportMetadataDialog(
+                        uris = importUris,
+                        repository = (application as MusicApplication).repository,
+                        onDismiss = { importUris = emptyList() }
+                    )
+                }
+
                 MusicApp(
                     viewModel = viewModel,
                     authManager = (application as MusicApplication).authManager,
@@ -560,7 +567,8 @@ fun HomeScreen(
                         song,
                         selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
                         onPlay = { viewModel.play(song) },
-                        onDelete = { viewModel.delete(song) }
+                        onDelete = { viewModel.delete(song) },
+                        onEdit = { viewModel.update(it) }
                     )
                 }
             }
@@ -650,7 +658,8 @@ fun LibraryScreen(
                         song,
                         selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
                         onPlay = { viewModel.play(song) },
-                        onDelete = { viewModel.delete(song) }
+                        onDelete = { viewModel.delete(song) },
+                        onEdit = { viewModel.update(it) }
                     )
                 }
             }
@@ -1181,10 +1190,11 @@ fun EmptyLibrary(onImport: () -> Unit, onDownload: () -> Unit, enabled: Boolean)
 }
 
 @Composable
-fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> Unit) {
+fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> Unit, onEdit: (Song) -> Unit) {
     val c = MusedColors.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     var showInfo by rememberSaveable { mutableStateOf(false) }
+    var showEdit by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
 
     Surface(
@@ -1235,6 +1245,7 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
                         Toast.makeText(context, "Add to playlist coming soon", Toast.LENGTH_SHORT).show()
                     })
                     DropdownMenuItem(text = { Text("Song info") }, onClick = { expanded = false; showInfo = true })
+                    DropdownMenuItem(text = { Text("Edit") }, onClick = { expanded = false; showEdit = true })
                     DropdownMenuItem(text = { Text("Delete", color = c.error) }, onClick = { expanded = false; onDelete() })
                 }
             }
@@ -1242,12 +1253,16 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
     }
 
     if (showInfo) {
-        SongInfoDialog(song, onDismiss = { showInfo = false })
+        SongInfoDialog(song, onDismiss = { showInfo = false }, onEdit = { showInfo = false; showEdit = true })
+    }
+
+    if (showEdit) {
+        com.example.offlinemusic.ui.EditSongDialog(song, onDismiss = { showEdit = false }, onSave = { onEdit(it) })
     }
 }
 
 @Composable
-fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
+fun SongInfoDialog(song: Song, onDismiss: () -> Unit, onEdit: () -> Unit) {
     val c = MusedColors.current
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1256,11 +1271,15 @@ fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Artist: ${song.artist}", color = c.textSecondary)
                 Text("Album: ${song.album}", color = c.textSecondary)
+                Text("Genre: ${song.genre}", color = c.textSecondary)
                 Text("Duration: ${formatTime(song.durationMs)}", color = c.textSecondary)
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Close", color = c.accent) }
+            TextButton(onClick = onDismiss) { Text("Close", color = c.textSecondary) }
+        },
+        dismissButton = {
+            TextButton(onClick = onEdit) { Text("Edit", color = c.accent) }
         },
         containerColor = c.surfaceElevated,
         shape = RoundedCornerShape(24.dp)
@@ -1561,11 +1580,12 @@ fun Artwork(song: Song, modifier: Modifier = Modifier) {
     if (bitmap != null) {
         Image(bitmap, null, modifier.clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
     } else {
-        Surface(modifier.clip(RoundedCornerShape(12.dp)), color = c.accent.copy(alpha = 0.15f)) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                Icon(Icons.Default.MusicNote, null, tint = c.accent.copy(alpha = 0.6f))
-            }
-        }
+        Image(
+            androidx.compose.ui.res.painterResource(id = R.drawable.default_cover),
+            contentDescription = null,
+            modifier = modifier.clip(RoundedCornerShape(12.dp)),
+            contentScale = ContentScale.Crop
+        )
     }
 }
 
