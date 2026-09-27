@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -230,7 +231,11 @@ fun MusicApp(
         DownloadDialog(onDismiss = { showDownload = false }, isLoading = isDownloading) { url -> handleDownload(url) }
     }
     if (showSearch) {
-        SearchDialog(query = search, onQueryChange = { search = it }, onDismiss = { showSearch = false })
+        SearchDialog(
+            songs = songs,
+            onPlay = { viewModel.play(it) },
+            onDismiss = { showSearch = false }
+        )
     }
     if (isDownloading) {
         AlertDialog(
@@ -1289,43 +1294,127 @@ fun SongInfoDialog(song: Song, onDismiss: () -> Unit, onEdit: () -> Unit) {
 }
 
 @Composable
-fun SearchDialog(query: String, onQueryChange: (String) -> Unit, onDismiss: () -> Unit) {
+fun SearchDialog(
+    songs: List<Song>,
+    onPlay: (Song) -> Unit,
+    onDismiss: () -> Unit
+) {
     val c = MusedColors.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = c.surfaceElevated,
-            tonalElevation = 0.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-        ) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text("Search", style = MaterialTheme.typography.titleMedium, color = c.textPrimary)
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Search your library…") },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = c.accent,
-                        unfocusedBorderColor = c.border,
-                        cursorColor = c.accent,
-                        focusedTextColor = c.textPrimary,
-                        unfocusedTextColor = c.textPrimary
+    var query by rememberSaveable { mutableStateOf("") }
+    val results = remember(songs, query) {
+        if (query.isBlank()) emptyList()
+        else songs.filter { "${it.title} ${it.artist} ${it.album}".contains(query, ignoreCase = true) }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.fillMaxSize(), color = c.background) {
+            Column(Modifier.fillMaxSize()) {
+                /* ── Search bar row ── */
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.ArrowBack, null, tint = c.textSecondary)
+                    }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("Search title, artist, album…", color = c.textMuted) },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = c.accent,
+                            unfocusedBorderColor = c.border,
+                            cursorColor = c.accent,
+                            focusedTextColor = c.textPrimary,
+                            unfocusedTextColor = c.textPrimary
+                        )
                     )
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Close", color = c.accent)
+                }
+
+                HorizontalDivider(color = c.border)
+
+                /* ── Results ── */
+                when {
+                    query.isBlank() -> {
+                        /* prompt state */
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Outlined.Search, null, Modifier.size(52.dp), tint = c.textMuted)
+                                Spacer(Modifier.height(12.dp))
+                                Text("Search your library", color = c.textSecondary, style = MaterialTheme.typography.bodyLarge)
+                                Text("by title, artist or album", color = c.textMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    results.isEmpty() -> {
+                        /* empty state */
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Outlined.SearchOff, null, Modifier.size(52.dp), tint = c.textMuted)
+                                Spacer(Modifier.height(12.dp))
+                                Text("No results for \"$query\"", color = c.textSecondary, style = MaterialTheme.typography.bodyLarge)
+                                Text("Try a different keyword", color = c.textMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    else -> {
+                        Text(
+                            "${results.size} result${if (results.size == 1) "" else "s"}",
+                            color = c.textMuted,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 4.dp)
+                        )
+                        LazyColumn(
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            items(results, key = { it.id }) { song ->
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onPlay(song); onDismiss() },
+                                    color = Color.Transparent
+                                ) {
+                                    Row(
+                                        Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Artwork(song, Modifier.size(48.dp))
+                                        Spacer(Modifier.width(14.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                song.title,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                color = c.textPrimary
+                                            )
+                                            Text(
+                                                "${song.artist} · ${song.album}",
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = c.textSecondary
+                                            )
+                                        }
+                                        Icon(Icons.Default.PlayArrow, null, tint = c.textMuted, modifier = Modifier.size(20.dp))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
 
 @Composable
 fun DownloadDialog(onDismiss: () -> Unit, isLoading: Boolean = false, onDownload: (String) -> Unit) {
@@ -1433,6 +1522,7 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
     var showMenu by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
 
     // Track cumulative horizontal drag to trigger skip
     var dragAccumulator by remember { mutableStateOf(0f) }
@@ -1446,8 +1536,8 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             when {
-                                dragAccumulator < -swipeThreshold -> viewModel.next()
-                                dragAccumulator > swipeThreshold -> viewModel.previous()
+                                dragAccumulator < -swipeThreshold -> viewModel.safeNext()
+                                dragAccumulator > swipeThreshold -> viewModel.safePrevious()
                             }
                             dragAccumulator = 0f
                         },
@@ -1493,6 +1583,10 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                             DropdownMenuItem(
                                 text = { Text("Edit", color = c.textPrimary) },
                                 onClick = { showMenu = false; showEdit = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("View queue", color = c.textPrimary) },
+                                onClick = { showMenu = false; showQueue = true }
                             )
                             DropdownMenuItem(
                                 text = { Text("Play next", color = c.textPrimary) },
@@ -1638,8 +1732,141 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
             onSave = { viewModel.update(it) }
         )
     }
+    if (showQueue) {
+        QueueDialog(
+            state = state,
+            onDismiss = { showQueue = false },
+            onPlay = { viewModel.play(it) }
+        )
+    }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════
+   Queue Dialog
+   ═══════════════════════════════════════════════════════════════ */
+
+@Composable
+fun QueueDialog(state: PlaybackState, onDismiss: () -> Unit, onPlay: (Song) -> Unit) {
+    val c = MusedColors.current
+    val lazyListState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    // Scroll to current song when dialog opens
+    LaunchedEffect(state.currentIndex) {
+        if (state.currentIndex >= 0) {
+            lazyListState.animateScrollToItem(state.currentIndex)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(modifier = Modifier.fillMaxSize(), color = c.background) {
+            Column(Modifier.fillMaxSize()) {
+                /* Header */
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.KeyboardArrowDown, null, tint = c.textSecondary)
+                    }
+                    Text(
+                        "Queue",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = c.textPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${state.queue.size} songs",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = c.textMuted,
+                        modifier = Modifier.padding(end = 16.dp)
+                    )
+                }
+
+                HorizontalDivider(color = c.border)
+
+                if (state.queue.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Outlined.QueueMusic, null, Modifier.size(52.dp), tint = c.textMuted)
+                            Spacer(Modifier.height(12.dp))
+                            Text("Queue is empty", color = c.textSecondary, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = lazyListState,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        itemsIndexed(state.queue, key = { _, song -> song.id }) { index, song ->
+                            val isCurrent = index == state.currentIndex
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPlay(song); onDismiss() },
+                                color = if (isCurrent) c.accent.copy(alpha = 0.10f) else Color.Transparent,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    /* Playing indicator or index */
+                                    Box(
+                                        modifier = Modifier.size(32.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isCurrent) {
+                                            Icon(
+                                                Icons.Default.VolumeUp, null,
+                                                tint = c.accent,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        } else {
+                                            Text(
+                                                "${index + 1}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = c.textMuted
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Artwork(song, Modifier.size(44.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            song.title,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isCurrent) c.accent else c.textPrimary
+                                        )
+                                        Text(
+                                            song.artist,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = c.textSecondary
+                                        )
+                                    }
+                                    Text(
+                                        formatTime(song.durationMs),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = c.textMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /* ═══════════════════════════════════════════════════════════════
    Artwork helper

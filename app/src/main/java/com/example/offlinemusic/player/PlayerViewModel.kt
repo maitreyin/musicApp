@@ -30,7 +30,9 @@ data class PlaybackState(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val repeatMode: RepeatMode = RepeatMode.OFF,
-    val shuffleEnabled: Boolean = false
+    val shuffleEnabled: Boolean = false,
+    val queue: List<Song> = emptyList(),
+    val currentIndex: Int = -1
 )
 
 data class EqualizerState(
@@ -98,12 +100,38 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggle() {
         if (player.mediaItemCount == 0) {
-            val song = currentSong() ?: return
-            play(song)
+            // No queue loaded yet – load the full library and play the first song
+            val list = songs.value
+            if (list.isEmpty()) return
+            player.setMediaItems(list.map { MediaItem.fromUri(it.localPath) }, 0, 0)
+            player.prepare()
+            player.play()
         } else {
             if (player.isPlaying) player.pause() else player.play()
-            publish()
         }
+        publish()
+    }
+
+    /** Navigate to previous, loading the queue first if the player hasn't been initialised. */
+    fun safePrevious() {
+        if (player.mediaItemCount == 0) ensureQueueLoaded()
+        player.seekToPreviousMediaItem()
+        publish()
+    }
+
+    /** Navigate to next, loading the queue first if the player hasn't been initialised. */
+    fun safeNext() {
+        if (player.mediaItemCount == 0) ensureQueueLoaded()
+        player.seekToNextMediaItem()
+        publish()
+    }
+
+    /** Load the full song library into ExoPlayer without starting playback. */
+    private fun ensureQueueLoaded() {
+        val list = songs.value
+        if (list.isEmpty()) return
+        player.setMediaItems(list.map { MediaItem.fromUri(it.localPath) }, 0, 0)
+        player.prepare()
     }
     fun seekTo(positionMs: Long) { player.seekTo(positionMs); publish() }
     fun previous() { player.seekToPreviousMediaItem(); publish() }
@@ -156,17 +184,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun delete(song: Song) { if (currentSong()?.id == song.id) player.stop(); viewModelScope.launch { repository.delete(song) } }
     fun update(song: Song) { viewModelScope.launch { repository.update(song) } }
 
-    private fun currentSong() = songs.value.getOrNull(player.currentMediaItemIndex)
+    private fun currentSong(): Song? {
+        val idx = player.currentMediaItemIndex
+        return songs.value.getOrNull(idx)
+    }
 
     private fun publish() {
         ensureEqualizer()
+        val list = songs.value
+        val idx = player.currentMediaItemIndex
         _playback.value = PlaybackState(
-            current = currentSong(),
+            current = list.getOrNull(idx),
             isPlaying = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
             repeatMode = _repeatMode.value,
-            shuffleEnabled = _shuffleEnabled.value
+            shuffleEnabled = _shuffleEnabled.value,
+            queue = list,
+            currentIndex = idx
         )
     }
 
