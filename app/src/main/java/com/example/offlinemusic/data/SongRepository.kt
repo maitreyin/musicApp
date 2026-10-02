@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -38,6 +39,8 @@ class SongRepository(
     val songs: Flow<List<Song>> = userId.flatMapLatest { userId ->
         userId?.let(dao::observeAll) ?: flowOf(emptyList())
     }
+
+    suspend fun songsForUser(userId: String): List<Song> = dao.observeAll(userId).first()
 
     /** Extracts metadata from a local audio Uri. */
     suspend fun extractMetadata(uri: Uri): SongMetadata = withContext(Dispatchers.IO) {

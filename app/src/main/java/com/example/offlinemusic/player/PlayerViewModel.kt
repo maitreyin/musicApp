@@ -1,6 +1,7 @@
 package com.example.offlinemusic.player
 
 import android.app.Application
+import android.content.Context
 import android.media.audiofx.Equalizer
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -9,6 +10,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.offlinemusic.MusicApplication
 import com.example.offlinemusic.data.Song
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,6 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 enum class RepeatMode {
     OFF,
@@ -46,6 +50,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val songs: StateFlow<List<Song>> = repository.songs.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val player = ExoPlayer.Builder(application).build()
+    private val playbackPreferences = application.getSharedPreferences("mused_playback", Context.MODE_PRIVATE)
+    private var activeUserId: String? = null
+    private var activeQueue: List<Song> = emptyList()
     private var equalizer: Equalizer? = null
 
     private val _playback = MutableStateFlow(PlaybackState())
@@ -78,12 +85,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         // becomes observable so a switch cannot continue exposing the previous user's music.
         viewModelScope.launch {
             var previousUserId: String? = null
-            repository.userId.collect { userId ->
+            repository.userId.collectLatest { userId ->
                 if (previousUserId != userId) {
+                    persistPlayback(previousUserId)
+                    activeQueue = emptyList()
                     player.stop()
                     player.clearMediaItems()
-                    publish()
+                    activeUserId = userId
+                    _playback.value = PlaybackState()
                     previousUserId = userId
+                }
+                if (userId != null) {
+                    val library = repository.songsForUser(userId)
+                    if (activeUserId == userId && player.mediaItemCount == 0) {
+                        restorePlayback(userId, library)
+                    }
                 }
             }
         }
@@ -91,8 +107,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun play(song: Song) {
-        val list = songs.value
-        player.setMediaItems(list.map { MediaItem.fromUri(it.localPath) }, list.indexOfFirst { it.id == song.id }.coerceAtLeast(0), 0)
+        if (song.userId != activeUserId) return
+        val list = availableSongs()
+        val songIndex = list.indexOfFirst { it.id == song.id }
+        if (songIndex < 0) return
+        activeQueue = list
+        player.setMediaItems(list.map(::mediaItem), songIndex, 0)
         player.prepare()
         player.play()
         publish()
@@ -101,9 +121,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun toggle() {
         if (player.mediaItemCount == 0) {
             // No queue loaded yet – load the full library and play the first song
-            val list = songs.value
+            val list = availableSongs()
             if (list.isEmpty()) return
-            player.setMediaItems(list.map { MediaItem.fromUri(it.localPath) }, 0, 0)
+            activeQueue = list
+            player.setMediaItems(list.map(::mediaItem), 0, 0)
             player.prepare()
             player.play()
         } else {
@@ -128,9 +149,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Load the full song library into ExoPlayer without starting playback. */
     private fun ensureQueueLoaded() {
-        val list = songs.value
+        val list = availableSongs()
         if (list.isEmpty()) return
-        player.setMediaItems(list.map { MediaItem.fromUri(it.localPath) }, 0, 0)
+        activeQueue = list
+        player.setMediaItems(list.map(::mediaItem), 0, 0)
         player.prepare()
     }
     fun seekTo(positionMs: Long) { player.seekTo(positionMs); publish() }
@@ -186,24 +208,68 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun currentSong(): Song? {
         val idx = player.currentMediaItemIndex
-        return songs.value.getOrNull(idx)
+        return activeQueue.getOrNull(idx)
     }
+
+    private fun availableSongs(): List<Song> = songs.value.filter { it.userId == activeUserId }
 
     private fun publish() {
         ensureEqualizer()
-        val list = songs.value
         val idx = player.currentMediaItemIndex
+        persistPlayback(activeUserId)
         _playback.value = PlaybackState(
-            current = list.getOrNull(idx),
+            current = activeQueue.getOrNull(idx),
             isPlaying = player.isPlaying,
             positionMs = player.currentPosition.coerceAtLeast(0),
             durationMs = player.duration.coerceAtLeast(0),
             repeatMode = _repeatMode.value,
             shuffleEnabled = _shuffleEnabled.value,
-            queue = list,
-            currentIndex = idx
+            queue = activeQueue,
+            currentIndex = if (player.mediaItemCount > 0) idx else -1
         )
     }
+
+    private fun mediaItem(song: Song): MediaItem =
+        MediaItem.Builder().setMediaId(song.id).setUri(song.localPath).build()
+
+    private fun restorePlayback(userId: String, library: List<Song>) {
+        activeQueue = library
+        val savedState = playbackPreferences.getString(playbackKey(userId), null)
+            ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+            ?: run {
+                publish()
+                return
+            }
+        val savedIds = savedState.optJSONArray("queue") ?: JSONArray()
+        val libraryById = library.associateBy(Song::id)
+        val restoredQueue = (0 until savedIds.length())
+            .mapNotNull { index -> libraryById[savedIds.optString(index)] }
+        if (restoredQueue.isEmpty()) {
+            publish()
+            return
+        }
+
+        val currentId = savedState.optString("current", "")
+        val currentIndex = restoredQueue.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
+        val positionMs = savedState.optLong("positionMs", 0L).coerceAtLeast(0L)
+        activeQueue = restoredQueue
+        player.setMediaItems(restoredQueue.map(::mediaItem), currentIndex, positionMs)
+        player.prepare()
+        publish()
+    }
+
+    private fun persistPlayback(userId: String?) {
+        if (userId == null || player.mediaItemCount == 0) return
+        val currentSong = activeQueue.getOrNull(player.currentMediaItemIndex) ?: return
+        val queue = JSONArray().apply { activeQueue.forEach { put(it.id) } }
+        val state = JSONObject()
+            .put("queue", queue)
+            .put("current", currentSong.id)
+            .put("positionMs", player.currentPosition.coerceAtLeast(0))
+        playbackPreferences.edit().putString(playbackKey(userId), state.toString()).apply()
+    }
+
+    private fun playbackKey(userId: String): String = "state:$userId"
 
     private fun ensureEqualizer() {
         val sessionId = player.audioSessionId
@@ -244,6 +310,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        persistPlayback(activeUserId)
         equalizer?.release()
         player.release()
         super.onCleared()
