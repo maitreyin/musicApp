@@ -9,9 +9,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.offlinemusic.MusicApplication
+import com.example.offlinemusic.data.Playlist
 import com.example.offlinemusic.data.Song
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +58,25 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private var activeQueue: List<Song> = emptyList()
     private var equalizer: Equalizer? = null
 
+    val favoriteSongs: StateFlow<List<Song>> = repository.favorites.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+    val favoriteIds: StateFlow<Set<String>> = repository.favoriteIds.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet()
+    )
+    val playlists: StateFlow<List<Playlist>> = repository.playlists.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+    val recentlyPlayed: StateFlow<List<Song>> = repository.recentlyPlayed.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()
+    )
+
+    private val _selectedPlaylistId = MutableStateFlow<String?>(null)
+    val selectedPlaylistId = _selectedPlaylistId.asStateFlow()
+    val selectedPlaylistSongs: StateFlow<List<Song>> = _selectedPlaylistId
+        .flatMapLatest { playlistId -> playlistId?.let(repository::observePlaylistSongs) ?: flowOf(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val _playback = MutableStateFlow(PlaybackState())
     val playback = _playback.asStateFlow()
 
@@ -77,8 +99,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) = publish()
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = publish()
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) recordCurrentSong()
+                publish()
+            }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                if (player.isPlaying) recordCurrentSong()
+                publish()
+            }
             override fun onPlaybackStateChanged(playbackState: Int) = publish()
         })
         // A playing queue is also account-owned. Stop it before a different account's library
@@ -92,6 +120,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     player.stop()
                     player.clearMediaItems()
                     activeUserId = userId
+                    _selectedPlaylistId.value = null
                     _playback.value = PlaybackState()
                     previousUserId = userId
                 }
@@ -205,6 +234,59 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun delete(song: Song) { if (currentSong()?.id == song.id) player.stop(); viewModelScope.launch { repository.delete(song) } }
     fun update(song: Song) { viewModelScope.launch { repository.update(song) } }
+
+    fun toggleFavorite(song: Song) {
+        viewModelScope.launch { runCatching { repository.toggleFavorite(song) } }
+    }
+
+    fun createPlaylist(name: String) {
+        viewModelScope.launch { runCatching { repository.createPlaylist(name) } }
+    }
+
+    fun renamePlaylist(playlistId: String, name: String) {
+        viewModelScope.launch { runCatching { repository.renamePlaylist(playlistId, name) } }
+    }
+
+    fun deletePlaylist(playlistId: String) {
+        viewModelScope.launch {
+            runCatching { repository.deletePlaylist(playlistId) }
+            if (_selectedPlaylistId.value == playlistId) _selectedPlaylistId.value = null
+        }
+    }
+
+    fun addSongToPlaylist(playlistId: String, song: Song) {
+        viewModelScope.launch { runCatching { repository.addSongToPlaylist(playlistId, song) } }
+    }
+
+    fun removeSongFromPlaylist(playlistId: String, songId: String) {
+        viewModelScope.launch { runCatching { repository.removeSongFromPlaylist(playlistId, songId) } }
+    }
+
+    fun selectPlaylist(playlistId: String?) {
+        _selectedPlaylistId.value = playlistId
+    }
+
+    fun playPlaylist(playlist: Playlist, startSongId: String? = null) {
+        viewModelScope.launch {
+            val userId = activeUserId ?: return@launch
+            if (playlist.userId != userId) return@launch
+            val list = repository.playlistSongsForUser(userId, playlist.id)
+            if (activeUserId != userId || list.isEmpty()) return@launch
+            activeQueue = list
+            val startIndex = startSongId?.let { id -> list.indexOfFirst { it.id == id } }
+                ?.takeIf { it >= 0 } ?: 0
+            player.setMediaItems(list.map(::mediaItem), startIndex, 0)
+            player.prepare()
+            player.play()
+            publish()
+        }
+    }
+
+    private fun recordCurrentSong() {
+        val song = currentSong() ?: return
+        if (song.userId != activeUserId) return
+        viewModelScope.launch { runCatching { repository.recordRecentlyPlayed(song) } }
+    }
 
     private fun currentSong(): Song? {
         val idx = player.currentMediaItemIndex

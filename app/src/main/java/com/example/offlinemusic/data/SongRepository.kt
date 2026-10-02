@@ -39,8 +39,86 @@ class SongRepository(
     val songs: Flow<List<Song>> = userId.flatMapLatest { userId ->
         userId?.let(dao::observeAll) ?: flowOf(emptyList())
     }
+    val favorites: Flow<List<Song>> = userId.flatMapLatest { userId ->
+        userId?.let(dao::observeFavorites) ?: flowOf(emptyList())
+    }
+    val favoriteIds: Flow<Set<String>> = userId.flatMapLatest { userId ->
+        userId?.let { dao.observeFavoriteIds(it).map(List<String>::toSet) } ?: flowOf(emptySet())
+    }
+    val playlists: Flow<List<Playlist>> = userId.flatMapLatest { userId ->
+        userId?.let(dao::observePlaylists) ?: flowOf(emptyList())
+    }
+    val recentlyPlayed: Flow<List<Song>> = userId.flatMapLatest { userId ->
+        userId?.let(dao::observeRecentlyPlayed) ?: flowOf(emptyList())
+    }
 
     suspend fun songsForUser(userId: String): List<Song> = dao.observeAll(userId).first()
+
+    fun observePlaylistSongs(playlistId: String): Flow<List<Song>> = userId.flatMapLatest { userId ->
+        userId?.let { dao.observePlaylistSongs(it, playlistId) } ?: flowOf(emptyList())
+    }
+
+    suspend fun playlistSongsForUser(userId: String, playlistId: String): List<Song> =
+        dao.observePlaylistSongs(userId, playlistId).first()
+
+    suspend fun toggleFavorite(song: Song) {
+        val userId = requireCurrentUserId()
+        check(song.userId == userId) { "Cannot change a favorite owned by another account" }
+        if (dao.isFavorite(userId, song.id)) {
+            dao.deleteFavorite(userId, song.id)
+        } else {
+            dao.upsertFavorite(Favorite(userId = userId, songId = song.id))
+        }
+    }
+
+    suspend fun createPlaylist(name: String): Playlist {
+        val userId = requireCurrentUserId()
+        val playlist = Playlist(userId = userId, id = UUID.randomUUID().toString(), name = name.trim())
+        require(playlist.name.isNotEmpty()) { "Playlist name cannot be empty" }
+        dao.insertPlaylist(playlist)
+        return playlist
+    }
+
+    suspend fun renamePlaylist(playlistId: String, name: String) {
+        val userId = requireCurrentUserId()
+        val normalizedName = name.trim()
+        require(normalizedName.isNotEmpty()) { "Playlist name cannot be empty" }
+        check(dao.ownsPlaylist(userId, playlistId)) { "Cannot rename a playlist owned by another account" }
+        dao.renamePlaylist(userId, playlistId, normalizedName)
+    }
+
+    suspend fun deletePlaylist(playlistId: String) {
+        val userId = requireCurrentUserId()
+        check(dao.ownsPlaylist(userId, playlistId)) { "Cannot delete a playlist owned by another account" }
+        dao.deletePlaylistSongs(userId, playlistId)
+        dao.deletePlaylist(userId, playlistId)
+    }
+
+    suspend fun addSongToPlaylist(playlistId: String, song: Song) {
+        val userId = requireCurrentUserId()
+        check(song.userId == userId) { "Cannot add a song owned by another account" }
+        check(dao.ownsPlaylist(userId, playlistId)) { "Cannot update a playlist owned by another account" }
+        dao.insertPlaylistSong(
+            PlaylistSong(
+                userId = userId,
+                playlistId = playlistId,
+                songId = song.id,
+                position = dao.nextPlaylistPosition(userId, playlistId)
+            )
+        )
+    }
+
+    suspend fun removeSongFromPlaylist(playlistId: String, songId: String) {
+        val userId = requireCurrentUserId()
+        check(dao.ownsPlaylist(userId, playlistId)) { "Cannot update a playlist owned by another account" }
+        dao.deletePlaylistSong(userId, playlistId, songId)
+    }
+
+    suspend fun recordRecentlyPlayed(song: Song) {
+        val userId = requireCurrentUserId()
+        if (song.userId != userId) return
+        dao.insertRecentPlay(RecentPlay(userId = userId, songId = song.id))
+    }
 
     /** Extracts metadata from a local audio Uri. */
     suspend fun extractMetadata(uri: Uri): SongMetadata = withContext(Dispatchers.IO) {
@@ -285,6 +363,9 @@ class SongRepository(
     suspend fun delete(song: Song) = withContext(Dispatchers.IO) {
         val userId = requireCurrentUserId()
         check(song.userId == userId) { "Cannot delete a song owned by another account" }
+        dao.deleteFavorite(userId, song.id)
+        dao.deletePlaylistSongReferences(userId, song.id)
+        dao.deleteRecentPlay(userId, song.id)
         dao.delete(song.id, userId)
         listOfNotNull(song.localPath, song.artworkPath).forEach { path ->
             val file = File(path)

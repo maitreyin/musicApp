@@ -55,6 +55,7 @@ import androidx.lifecycle.lifecycleScope
 import coil.compose.AsyncImage
 import com.example.offlinemusic.auth.AuthUiState
 import com.example.offlinemusic.auth.ProfileUiState
+import com.example.offlinemusic.data.Playlist
 import com.example.offlinemusic.data.Song
 import com.example.offlinemusic.player.PlaybackState
 import com.example.offlinemusic.player.PlayerViewModel
@@ -183,6 +184,12 @@ fun MusicApp(
 ) {
     val c = MusedColors.current
     val songs by viewModel.songs.collectAsStateWithLifecycle()
+    val favoriteSongs by viewModel.favoriteSongs.collectAsStateWithLifecycle()
+    val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
+    val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    val recentlyPlayed by viewModel.recentlyPlayed.collectAsStateWithLifecycle()
+    val selectedPlaylistId by viewModel.selectedPlaylistId.collectAsStateWithLifecycle()
+    val selectedPlaylistSongs by viewModel.selectedPlaylistSongs.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
     val authState by authManager.authState.collectAsStateWithLifecycle()
     val profileState by authManager.profileState.collectAsStateWithLifecycle()
@@ -204,6 +211,11 @@ fun MusicApp(
     var downloadSuccess by rememberSaveable { mutableStateOf<String?>(null) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    var songToAddToPlaylist by remember { mutableStateOf<Song?>(null) }
+
+    LaunchedEffect(authState.userId) {
+        songToAddToPlaylist = null
+    }
 
     LaunchedEffect(authState.signedIn) {
         if (authState.signedIn) {
@@ -235,6 +247,33 @@ fun MusicApp(
             songs = songs,
             onPlay = { viewModel.play(it) },
             onDismiss = { showSearch = false }
+        )
+    }
+    songToAddToPlaylist?.let { song ->
+        AlertDialog(
+            onDismissRequest = { songToAddToPlaylist = null },
+            title = { Text("Add to playlist", color = c.textPrimary) },
+            text = {
+                if (playlists.isEmpty()) {
+                    Text("Create a playlist in Library first", color = c.textSecondary)
+                } else {
+                    Column {
+                        playlists.forEach { playlist ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.addSongToPlaylist(playlist.id, song)
+                                    songToAddToPlaylist = null
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(playlist.name, color = c.textPrimary, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { songToAddToPlaylist = null }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
         )
     }
     if (isDownloading) {
@@ -335,8 +374,22 @@ fun MusicApp(
                         googleSignInLauncher.launch(authManager.getSignInIntent())
                     }
                 )
-                Screen.HOME -> HomeScreen(songs, filtered, viewModel, onImport, { showDownload = true }, { showSearch = true }, isDownloading)
-                Screen.LIBRARY -> LibraryScreen(songs, filtered, viewModel, { showSearch = true })
+                Screen.HOME -> HomeScreen(
+                    songs, filtered, viewModel, recentlyPlayed, favoriteIds, onImport,
+                    { showDownload = true }, { showSearch = true }, { songToAddToPlaylist = it }, isDownloading
+                )
+                Screen.LIBRARY -> LibraryScreen(
+                    songs = songs,
+                    filtered = filtered,
+                    favorites = favoriteSongs,
+                    favoriteIds = favoriteIds,
+                    playlists = playlists,
+                    selectedPlaylistId = selectedPlaylistId,
+                    selectedPlaylistSongs = selectedPlaylistSongs,
+                    viewModel = viewModel,
+                    onSearchClick = { showSearch = true },
+                    onAddToPlaylist = { songToAddToPlaylist = it }
+                )
                 Screen.EQUALIZER -> EqualizerScreen(viewModel, { showSearch = true })
                 Screen.PROFILE -> ProfileScreen(
                     authState = authState,
@@ -492,9 +545,12 @@ fun HomeScreen(
     songs: List<Song>,
     filtered: List<Song>,
     viewModel: PlayerViewModel,
+    recentlyPlayed: List<Song>,
+    favoriteIds: Set<String>,
     onImport: () -> Unit,
     onDownload: () -> Unit,
     onSearchClick: () -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
     isLoading: Boolean
 ) {
     val c = MusedColors.current
@@ -539,6 +595,23 @@ fun HomeScreen(
         if (songs.isEmpty()) {
             EmptyLibrary(onImport, onDownload, !isLoading)
         } else {
+            if (recentlyPlayed.isNotEmpty()) {
+                Text(
+                    "Recently Played",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = c.textPrimary,
+                    modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp)
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(recentlyPlayed, key = { "played-${it.id}" }) { song ->
+                        RecentSongCard(song = song, onPlay = { viewModel.play(song) })
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
             /* Recently added section */
             if (songs.size > 3) {
                 Text(
@@ -575,7 +648,10 @@ fun HomeScreen(
                         selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
                         onPlay = { viewModel.play(song) },
                         onDelete = { viewModel.delete(song) },
-                        onEdit = { viewModel.update(it) }
+                        onEdit = { viewModel.update(it) },
+                        isFavorite = song.id in favoriteIds,
+                        onFavoriteToggle = { viewModel.toggleFavorite(song) },
+                        onAddToPlaylist = onAddToPlaylist
                     )
                 }
             }
@@ -625,52 +701,211 @@ fun RecentSongCard(song: Song, onPlay: () -> Unit) {
 fun LibraryScreen(
     songs: List<Song>,
     filtered: List<Song>,
+    favorites: List<Song>,
+    favoriteIds: Set<String>,
+    playlists: List<Playlist>,
+    selectedPlaylistId: String?,
+    selectedPlaylistSongs: List<Song>,
     viewModel: PlayerViewModel,
-    onSearchClick: () -> Unit
+    onSearchClick: () -> Unit,
+    onAddToPlaylist: (Song) -> Unit
 ) {
     val c = MusedColors.current
+    var showCreatePlaylist by rememberSaveable { mutableStateOf(false) }
+    var playlistName by rememberSaveable { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
         TopBar("Library", onSearchClick)
-
-        if (songs.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Surface(
-                        shape = CircleShape,
-                        color = c.accent.copy(alpha = 0.10f),
-                        modifier = Modifier.size(72.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Outlined.LibraryMusic, null, Modifier.size(34.dp), tint = c.accent)
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Text("No songs yet", color = c.textSecondary, style = MaterialTheme.typography.bodyLarge)
-                    Text("Import or download to get started", color = c.textMuted, style = MaterialTheme.typography.bodySmall)
-                }
+        LazyColumn(
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            item {
+                Text(
+                    "${songs.size} songs",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.textMuted,
+                    modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp)
+                )
             }
-        } else {
-            Text(
-                "${songs.size} songs",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.textMuted,
-                modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 4.dp)
-            )
-            LazyColumn(
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(filtered, key = { it.id }) { song ->
+            item { SectionHeading("Favorites", favorites.size) }
+            if (favorites.isEmpty()) {
+                item { Text("No favorites yet", color = c.textMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
+            } else {
+                items(favorites, key = { "favorite-${it.id}" }) { song ->
                     SongRow(
-                        song,
+                        song = song,
                         selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
                         onPlay = { viewModel.play(song) },
                         onDelete = { viewModel.delete(song) },
-                        onEdit = { viewModel.update(it) }
+                        onEdit = { viewModel.update(it) },
+                        isFavorite = true,
+                        onFavoriteToggle = { viewModel.toggleFavorite(song) },
+                        onAddToPlaylist = onAddToPlaylist
+                    )
+                }
+            }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 4.dp, top = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    SectionHeading("Playlists", playlists.size)
+                    IconButton(onClick = { playlistName = ""; showCreatePlaylist = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Create playlist", tint = c.accent)
+                    }
+                }
+            }
+            if (playlists.isEmpty()) {
+                item { Text("No playlists yet", color = c.textMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
+            } else {
+                items(playlists, key = { "playlist-${it.id}" }) { playlist ->
+                    PlaylistRow(
+                        playlist = playlist,
+                        selected = selectedPlaylistId == playlist.id,
+                        onSelect = { viewModel.selectPlaylist(if (selectedPlaylistId == playlist.id) null else playlist.id) },
+                        onPlay = { viewModel.playPlaylist(playlist) },
+                        onRename = { viewModel.renamePlaylist(playlist.id, it) },
+                        onDelete = { viewModel.deletePlaylist(playlist.id) }
+                    )
+                }
+            }
+            playlists.firstOrNull { it.id == selectedPlaylistId }?.let { playlist ->
+                item { SectionHeading(playlist.name, selectedPlaylistSongs.size) }
+                if (selectedPlaylistSongs.isEmpty()) {
+                    item { Text("This playlist is empty", color = c.textMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
+                } else {
+                    items(selectedPlaylistSongs, key = { "${playlist.id}-${it.id}" }) { song ->
+                        SongRow(
+                            song = song,
+                            selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
+                            onPlay = { viewModel.playPlaylist(playlist, song.id) },
+                            onDelete = { viewModel.delete(song) },
+                            onEdit = { viewModel.update(it) },
+                            isFavorite = song.id in favoriteIds,
+                            onFavoriteToggle = { viewModel.toggleFavorite(song) },
+                            onAddToPlaylist = onAddToPlaylist,
+                            onRemoveFromPlaylist = { viewModel.removeSongFromPlaylist(playlist.id, song.id) },
+                            allowLibraryDeletion = false
+                        )
+                    }
+                }
+            }
+            item { SectionHeading("All Songs", filtered.size) }
+            if (songs.isEmpty()) {
+                item { Text("Import or download to get started", color = c.textMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)) }
+            } else {
+                items(filtered, key = { "song-${it.id}" }) { song ->
+                    SongRow(
+                        song = song,
+                        selected = viewModel.playback.collectAsStateWithLifecycle().value.current?.id == song.id,
+                        onPlay = { viewModel.play(song) },
+                        onDelete = { viewModel.delete(song) },
+                        onEdit = { viewModel.update(it) },
+                        isFavorite = song.id in favoriteIds,
+                        onFavoriteToggle = { viewModel.toggleFavorite(song) },
+                        onAddToPlaylist = onAddToPlaylist
                     )
                 }
             }
         }
+    }
+
+    if (showCreatePlaylist) {
+        AlertDialog(
+            onDismissRequest = { showCreatePlaylist = false },
+            title = { Text("Create playlist", color = c.textPrimary) },
+            text = {
+                OutlinedTextField(
+                    value = playlistName,
+                    onValueChange = { playlistName = it },
+                    singleLine = true,
+                    label = { Text("Playlist name") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = playlistName.isNotBlank(),
+                    onClick = { viewModel.createPlaylist(playlistName); showCreatePlaylist = false }
+                ) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { showCreatePlaylist = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
+    }
+}
+
+@Composable
+private fun SectionHeading(title: String, count: Int) {
+    val c = MusedColors.current
+    Text(
+        "$title  $count",
+        style = MaterialTheme.typography.titleMedium,
+        color = c.textPrimary,
+        modifier = Modifier.padding(start = 4.dp, top = 12.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun PlaylistRow(
+    playlist: Playlist,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onPlay: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    val c = MusedColors.current
+    var expanded by rememberSaveable(playlist.id) { mutableStateOf(false) }
+    var showRename by rememberSaveable(playlist.id) { mutableStateOf(false) }
+    var showDelete by rememberSaveable(playlist.id) { mutableStateOf(false) }
+    var name by rememberSaveable(playlist.id) { mutableStateOf(playlist.name) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
+        color = if (selected) c.accent.copy(alpha = 0.10f) else Color.Transparent,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.QueueMusic, null, tint = c.accent, modifier = Modifier.padding(horizontal = 8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(playlist.name, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Playlist", color = c.textMuted, style = MaterialTheme.typography.bodySmall)
+            }
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "Play playlist", tint = c.accent)
+            }
+            Box {
+                IconButton(onClick = { expanded = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Playlist options", tint = c.textMuted)
+                }
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { expanded = false; name = playlist.name; showRename = true })
+                    DropdownMenuItem(text = { Text("Delete", color = c.error) }, onClick = { expanded = false; showDelete = true })
+                }
+            }
+        }
+    }
+    if (showRename) {
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename playlist", color = c.textPrimary) },
+            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Playlist name") }) },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = { onRename(name); showRename = false }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
+    }
+    if (showDelete) {
+        AlertDialog(
+            onDismissRequest = { showDelete = false },
+            title = { Text("Delete playlist?", color = c.textPrimary) },
+            text = { Text(playlist.name, color = c.textSecondary) },
+            confirmButton = { TextButton(onClick = { onDelete(); showDelete = false }) { Text("Delete", color = c.error) } },
+            dismissButton = { TextButton(onClick = { showDelete = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
     }
 }
 
@@ -1197,13 +1432,22 @@ fun EmptyLibrary(onImport: () -> Unit, onDownload: () -> Unit, enabled: Boolean)
 }
 
 @Composable
-fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> Unit, onEdit: (Song) -> Unit) {
+fun SongRow(
+    song: Song,
+    selected: Boolean,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+    onEdit: (Song) -> Unit,
+    isFavorite: Boolean = false,
+    onFavoriteToggle: (Song) -> Unit = {},
+    onAddToPlaylist: (Song) -> Unit = {},
+    onRemoveFromPlaylist: (() -> Unit)? = null,
+    allowLibraryDeletion: Boolean = true
+) {
     val c = MusedColors.current
     var expanded by rememberSaveable { mutableStateOf(false) }
     var showInfo by rememberSaveable { mutableStateOf(false) }
     var showEdit by rememberSaveable { mutableStateOf(false) }
-    val context = LocalContext.current
-
     Surface(
         modifier = Modifier
             .clickable(onClick = onPlay)
@@ -1237,6 +1481,13 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
                 )
             }
             Text(formatTime(song.durationMs), style = MaterialTheme.typography.bodySmall, color = c.textMuted)
+            IconButton(onClick = { onFavoriteToggle(song) }, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (isFavorite) c.accent else c.textMuted
+                )
+            }
             Box {
                 IconButton(onClick = { expanded = true }, modifier = Modifier.size(36.dp)) {
                     Icon(Icons.Default.MoreVert, contentDescription = "More options", tint = c.textMuted)
@@ -1249,11 +1500,19 @@ fun SongRow(song: Song, selected: Boolean, onPlay: () -> Unit, onDelete: () -> U
                     DropdownMenuItem(text = { Text("Play") }, onClick = { expanded = false; onPlay() })
                     DropdownMenuItem(text = { Text("Add to playlist") }, onClick = {
                         expanded = false
-                        Toast.makeText(context, "Add to playlist coming soon", Toast.LENGTH_SHORT).show()
+                        onAddToPlaylist(song)
                     })
+                    if (onRemoveFromPlaylist != null) {
+                        DropdownMenuItem(text = { Text("Remove from playlist") }, onClick = {
+                            expanded = false
+                            onRemoveFromPlaylist()
+                        })
+                    }
                     DropdownMenuItem(text = { Text("Song info") }, onClick = { expanded = false; showInfo = true })
                     DropdownMenuItem(text = { Text("Edit") }, onClick = { expanded = false; showEdit = true })
-                    DropdownMenuItem(text = { Text("Delete", color = c.error) }, onClick = { expanded = false; onDelete() })
+                    if (allowLibraryDeletion) {
+                        DropdownMenuItem(text = { Text("Delete", color = c.error) }, onClick = { expanded = false; onDelete() })
+                    }
                 }
             }
         }
