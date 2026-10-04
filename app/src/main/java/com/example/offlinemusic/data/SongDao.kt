@@ -69,6 +69,8 @@ interface SongDao {
     suspend fun deletePlaylistSongReferences(userId: String, songId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(song: Song)
+    @Query("UPDATE songs SET lyrics = :lyrics WHERE id = :songId AND user_id = :userId")
+    suspend fun updateLyrics(userId: String, songId: String, lyrics: String): Int
     @Query("DELETE FROM songs WHERE id = :id AND user_id = :userId")
     suspend fun delete(id: String, userId: String)
 }

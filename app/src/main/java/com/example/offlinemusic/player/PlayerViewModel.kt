@@ -2,12 +2,13 @@ package com.example.offlinemusic.player
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.media.audiofx.Equalizer
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import com.example.offlinemusic.MusicApplication
 import com.example.offlinemusic.data.Playlist
 import com.example.offlinemusic.data.Song
@@ -49,10 +50,11 @@ data class EqualizerState(
 )
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = (application as MusicApplication).repository
+    private val musicApplication = application as MusicApplication
+    private val repository = musicApplication.repository
     val songs: StateFlow<List<Song>> = repository.songs.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val player = ExoPlayer.Builder(application).build()
+    private val player = musicApplication.player
     private val playbackPreferences = application.getSharedPreferences("mused_playback", Context.MODE_PRIVATE)
     private var activeUserId: String? = null
     private var activeQueue: List<Song> = emptyList()
@@ -97,18 +99,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         "Club" to listOf(68, 66, 58, 62, 72)
     )
 
+    private val playerListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) recordCurrentSong()
+            publish()
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (player.isPlaying) recordCurrentSong()
+            publish()
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) = publish()
+    }
+
     init {
-        player.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) recordCurrentSong()
-                publish()
-            }
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (player.isPlaying) recordCurrentSong()
-                publish()
-            }
-            override fun onPlaybackStateChanged(playbackState: Int) = publish()
-        })
+        musicApplication.playerViewModelAttached = true
+        player.addListener(playerListener)
         // A playing queue is also account-owned. Stop it before a different account's library
         // becomes observable so a switch cannot continue exposing the previous user's music.
         viewModelScope.launch {
@@ -116,10 +123,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             repository.userId.collectLatest { userId ->
                 if (previousUserId != userId) {
                     persistPlayback(previousUserId)
-                    activeQueue = emptyList()
-                    player.stop()
-                    player.clearMediaItems()
+                    val canReusePlayer = previousUserId == null &&
+                        userId != null && musicApplication.playbackOwnerUserId == userId
+                    if (!canReusePlayer) {
+                        activeQueue = emptyList()
+                        player.stop()
+                        player.clearMediaItems()
+                    }
                     activeUserId = userId
+                    musicApplication.playbackOwnerUserId = userId
                     _selectedPlaylistId.value = null
                     _playback.value = PlaybackState()
                     previousUserId = userId
@@ -128,6 +140,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     val library = repository.songsForUser(userId)
                     if (activeUserId == userId && player.mediaItemCount == 0) {
                         restorePlayback(userId, library)
+                    } else if (activeUserId == userId && activeQueue.isEmpty()) {
+                        val libraryById = library.associateBy(Song::id)
+                        val attachedQueue = (0 until player.mediaItemCount)
+                            .mapNotNull { index -> libraryById[player.getMediaItemAt(index).mediaId] }
+                        if (attachedQueue.size == player.mediaItemCount) {
+                            activeQueue = attachedQueue
+                            publish()
+                        } else {
+                            player.stop()
+                            player.clearMediaItems()
+                            restorePlayback(userId, library)
+                        }
                     }
                 }
             }
@@ -143,6 +167,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         activeQueue = list
         player.setMediaItems(list.map(::mediaItem), songIndex, 0)
         player.prepare()
+        startPlaybackService()
         player.play()
         publish()
     }
@@ -155,9 +180,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             activeQueue = list
             player.setMediaItems(list.map(::mediaItem), 0, 0)
             player.prepare()
+            startPlaybackService()
             player.play()
         } else {
-            if (player.isPlaying) player.pause() else player.play()
+            if (player.isPlaying) {
+                player.pause()
+            } else {
+                startPlaybackService()
+                player.play()
+            }
         }
         publish()
     }
@@ -187,6 +218,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun seekTo(positionMs: Long) { player.seekTo(positionMs); publish() }
     fun previous() { player.seekToPreviousMediaItem(); publish() }
     fun next() { player.seekToNextMediaItem(); publish() }
+
+    suspend fun saveLyrics(song: Song, lyrics: String) {
+        check(song.userId == activeUserId) { "Cannot update lyrics for a song owned by another account" }
+        repository.updateLyrics(song, lyrics)
+        val queueIndex = activeQueue.indexOfFirst { it.id == song.id }
+        if (queueIndex >= 0) {
+            activeQueue = activeQueue.toMutableList().apply {
+                this[queueIndex] = this[queueIndex].copy(lyrics = lyrics)
+            }
+            publish()
+        }
+    }
 
     fun cycleRepeatMode() {
         _repeatMode.value = when (_repeatMode.value) {
@@ -277,6 +320,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 ?.takeIf { it >= 0 } ?: 0
             player.setMediaItems(list.map(::mediaItem), startIndex, 0)
             player.prepare()
+            startPlaybackService()
             player.play()
             publish()
         }
@@ -312,7 +356,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun mediaItem(song: Song): MediaItem =
-        MediaItem.Builder().setMediaId(song.id).setUri(song.localPath).build()
+        MediaItem.Builder()
+            .setMediaId(song.id)
+            .setUri(song.localPath)
+            .setMediaMetadata(
+                androidx.media3.common.MediaMetadata.Builder()
+                    .setTitle(song.title)
+                    .setArtist(song.artist)
+                    .setAlbumTitle(song.album)
+                    .setArtworkUri(song.artworkPath?.let { android.net.Uri.fromFile(java.io.File(it)) })
+                    .build()
+            )
+            .build()
 
     private fun restorePlayback(userId: String, library: List<Song>) {
         activeQueue = library
@@ -352,6 +407,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun playbackKey(userId: String): String = "state:$userId"
+
+    private fun startPlaybackService() {
+        ContextCompat.startForegroundService(
+            getApplication(),
+            Intent(getApplication(), PlaybackService::class.java)
+        )
+    }
 
     private fun ensureEqualizer() {
         val sessionId = player.audioSessionId
@@ -393,8 +455,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         persistPlayback(activeUserId)
+        player.removeListener(playerListener)
+        musicApplication.playerViewModelAttached = false
         equalizer?.release()
-        player.release()
         super.onCleared()
     }
 }

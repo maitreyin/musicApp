@@ -17,5 +17,6 @@ data class Song(
     /** Absolute path below the app's filesDir/audio directory. Never a public Downloads path. */
     val localPath: String,
     val artworkPath: String? = null,
-    val addedAt: Long = System.currentTimeMillis()
+    val addedAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "''") val lyrics: String = ""
 )

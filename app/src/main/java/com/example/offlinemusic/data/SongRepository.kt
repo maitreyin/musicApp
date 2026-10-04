@@ -381,6 +381,12 @@ class SongRepository(
         dao.upsert(song)
     }
 
+    suspend fun updateLyrics(song: Song, lyrics: String) = withContext(Dispatchers.IO) {
+        val userId = requireCurrentUserId()
+        check(song.userId == userId) { "Cannot update lyrics for a song owned by another account" }
+        check(dao.updateLyrics(userId, song.id, lyrics) == 1) { "Song is no longer available in this account" }
+    }
+
     private fun requireCurrentUserId(): String =
         authState.value.userId ?: error("Sign in before changing the music library")
 }

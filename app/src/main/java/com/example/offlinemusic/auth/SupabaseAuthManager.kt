@@ -287,7 +287,7 @@ class SupabaseAuthManager(private val context: Context) {
         runCatching {
             val mimeType = context.contentResolver.getType(uri)
                 ?.takeIf { it.startsWith("image/", ignoreCase = true) }
-                ?: error("Selected file is not a supported image")
+                ?: if (uri.scheme == "file") "image/jpeg" else error("Selected file is not a supported image")
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("Could not read image file")
 
@@ -331,6 +331,43 @@ class SupabaseAuthManager(private val context: Context) {
             _profileState.value = _profileState.value.copy(
                 isSaving = false,
                 error = "Failed to upload picture. Please try again."
+            )
+        }
+    }
+
+    suspend fun removeProfilePicture() = withContext(Dispatchers.IO) {
+        val userId = supabase.auth.currentSessionOrNull()?.user?.id
+        if (userId.isNullOrBlank()) {
+            _profileState.value = _profileState.value.copy(error = friendlyProfileError())
+            return@withContext
+        }
+
+        _profileState.value = _profileState.value.copy(isSaving = true, error = null)
+        runCatching {
+            val previousPath = fetchProfile(userId)?.stringValue("avatar_url")
+            supabase.from("profiles").update(
+                buildJsonObject { put("avatar_url", JsonNull) }
+            ) {
+                filter { eq("id", userId) }
+            }
+            check(fetchProfile(userId)?.stringValue("avatar_url").isNullOrBlank()) {
+                "Profile avatar path was not cleared"
+            }
+            if (!previousPath.isNullOrBlank() && previousPath.startsWith("$userId/")) {
+                runCatching { supabase.storage["avatars"].delete(previousPath) }
+                    .onFailure { throwable -> Log.w("SupabaseAuthManager", "Could not remove previous avatar", throwable) }
+            }
+        }.onSuccess {
+            _profileState.value = _profileState.value.copy(
+                isSaving = false,
+                avatarUrl = null,
+                error = null
+            )
+        }.onFailure { throwable ->
+            Log.e("SupabaseAuthManager", "Could not remove profile picture", throwable)
+            _profileState.value = _profileState.value.copy(
+                isSaving = false,
+                error = "Failed to remove picture. Please try again."
             )
         }
     }

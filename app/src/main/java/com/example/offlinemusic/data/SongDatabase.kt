@@ -7,7 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Song::class, Favorite::class, Playlist::class, PlaylistSong::class, RecentPlay::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class SongDatabase : RoomDatabase() {
@@ -45,6 +45,11 @@ abstract class SongDatabase : RoomDatabase() {
                 database.execSQL("CREATE TABLE IF NOT EXISTS recent_plays (user_id TEXT NOT NULL, song_id TEXT NOT NULL, played_at INTEGER NOT NULL, PRIMARY KEY(user_id, song_id))")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_recent_plays_user_id_played_at ON recent_plays(user_id, played_at)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_recent_plays_song_id ON recent_plays(song_id)")
+            }
+        }
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE songs ADD COLUMN lyrics TEXT NOT NULL DEFAULT ''")
             }
         }
     }

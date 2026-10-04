@@ -1,13 +1,18 @@
 package com.example.offlinemusic
 
+import android.app.Activity
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.content.pm.PackageManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.content.FileProvider
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -61,7 +66,14 @@ import com.example.offlinemusic.player.PlaybackState
 import com.example.offlinemusic.player.PlayerViewModel
 import com.example.offlinemusic.player.RepeatMode
 import com.example.offlinemusic.ui.theme.*
+import com.yalantis.ucrop.UCrop
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.URL
+import java.util.Locale
+import java.util.UUID
 
 /* ═══════════════════════════════════════════════════════════════
    Activity
@@ -119,7 +131,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════════════
    Theme wrapper
    ═══════════════════════════════════════════════════════════════ */
 
@@ -202,6 +214,25 @@ fun MusicApp(
     val googleSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val scope = (context as? ComponentActivity)?.lifecycleScope ?: return@rememberLauncherForActivityResult
         scope.launch { authManager.handleSignInResult(result) }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {}
+    var notificationPermissionRequested by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(playback.isPlaying) {
+        if (
+            playback.isPlaying &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !notificationPermissionRequested &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionRequested = true
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     var currentScreen by rememberSaveable { mutableStateOf(startupScreen) }
@@ -398,7 +429,16 @@ fun MusicApp(
                     onThemeChange = onThemeChange,
                     onLoadProfile = { lifecycleScope?.launch { authManager.loadProfile() } },
                     onSaveUsername = { username -> lifecycleScope?.launch { authManager.saveUsername(username) } },
-                    onUpdateAvatar = { uri -> lifecycleScope?.launch { authManager.uploadProfilePicture(uri) } },
+                    onUpdateAvatar = { uri ->
+                        lifecycleScope?.launch {
+                            try {
+                                authManager.uploadProfilePicture(uri)
+                            } finally {
+                                if (uri.scheme == "file") uri.path?.let(::File)?.delete()
+                            }
+                        }
+                    },
+                    onRemoveAvatar = { lifecycleScope?.launch { authManager.removeProfilePicture() } },
                     onGoogleSignIn = {
                         authManager.beginSignIn()
                         googleSignInLauncher.launch(authManager.getSignInIntent())
@@ -1049,6 +1089,7 @@ fun ProfileScreen(
     onLoadProfile: () -> Unit,
     onSaveUsername: (String) -> Unit,
     onUpdateAvatar: (android.net.Uri) -> Unit,
+    onRemoveAvatar: () -> Unit,
     onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onDeleteAccount: () -> Unit
@@ -1059,8 +1100,153 @@ fun ProfileScreen(
         if (authState.signedIn) onLoadProfile()
     }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { onUpdateAvatar(it) }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val avatarUrl = profileState.avatarUrl ?: authState.avatarUrl
+    val hasCustomAvatar = !profileState.avatarUrl.isNullOrBlank()
+    var cameraCaptureFile by remember { mutableStateOf<File?>(null) }
+    var cameraCaptureUri by remember { mutableStateOf<Uri?>(null) }
+    var cropSourceFile by remember { mutableStateOf<File?>(null) }
+    var cropOutputFile by remember { mutableStateOf<File?>(null) }
+    var isPreparingCrop by remember { mutableStateOf(false) }
+    var showAvatarPreview by rememberSaveable { mutableStateOf(false) }
+    var showAvatarOptions by rememberSaveable { mutableStateOf(false) }
+    var showImageSources by rememberSaveable { mutableStateOf(false) }
+    var showRemoveAvatarConfirm by rememberSaveable { mutableStateOf(false) }
+
+    val cropLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val outputUri = result.data?.let(UCrop::getOutput)
+            if (outputUri != null) {
+                onUpdateAvatar(outputUri)
+            } else {
+                Toast.makeText(context, "Could not load the cropped image", Toast.LENGTH_SHORT).show()
+                cropOutputFile?.delete()
+            }
+        } else if (result.resultCode == UCrop.RESULT_ERROR) {
+            val message = result.data?.let(UCrop::getError)?.localizedMessage ?: "Could not crop this image"
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            cropOutputFile?.delete()
+        } else {
+            cropOutputFile?.delete()
+        }
+        cropSourceFile?.delete()
+        cropSourceFile = null
+        cropOutputFile = null
+    }
+    val launchCrop: (Uri, File?) -> Unit = { inputUri, sourceFile ->
+        val outputFile = File(context.cacheDir, "avatar-${UUID.randomUUID()}.jpg")
+        try {
+            val cropIntent = UCrop.of(inputUri, Uri.fromFile(outputFile))
+                .withAspectRatio(1f, 1f)
+                .withMaxResultSize(1024, 1024)
+                .getIntent(context)
+            cropSourceFile = sourceFile
+            cropOutputFile = outputFile
+            cropLauncher.launch(cropIntent)
+        } catch (exception: Exception) {
+            sourceFile?.delete()
+            outputFile.delete()
+            cropSourceFile = null
+            cropOutputFile = null
+            Toast.makeText(context, exception.localizedMessage ?: "Could not open image cropper", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            isPreparingCrop = true
+            coroutineScope.launch {
+                var sourceFile: File? = null
+                try {
+                    val copiedFile = withContext(Dispatchers.IO) {
+                        val mimeType = context.contentResolver.getType(uri)
+                        require(mimeType == null || mimeType.startsWith("image/", ignoreCase = true)) {
+                            "Selected file is not a supported image"
+                        }
+                        val file = File.createTempFile("avatar-gallery-", ".img", context.cacheDir)
+                        try {
+                            val input = context.contentResolver.openInputStream(uri)
+                                ?: error("Could not read selected image")
+                            input.use { stream -> file.outputStream().use(stream::copyTo) }
+                            check(file.length() > 0L) { "Selected image is empty" }
+                            file
+                        } catch (exception: Exception) {
+                            file.delete()
+                            throw exception
+                        }
+                    }
+                    sourceFile = copiedFile
+                    launchCrop(Uri.fromFile(copiedFile), copiedFile)
+                } catch (exception: Exception) {
+                    sourceFile?.delete()
+                    Toast.makeText(
+                        context,
+                        exception.localizedMessage ?: "Could not load selected image",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } finally {
+                    isPreparingCrop = false
+                }
+            }
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
+        val sourceFile = cameraCaptureFile
+        val sourceUri = cameraCaptureUri
+        cameraCaptureFile = null
+        cameraCaptureUri = null
+        if (captured && sourceFile?.exists() == true && sourceUri != null) {
+            launchCrop(sourceUri, sourceFile)
+        } else {
+            sourceFile?.delete()
+        }
+    }
+
+    fun launchCamera() {
+        runCatching {
+            val directory = File(context.cacheDir, "avatar-captures").apply { mkdirs() }
+            val captureFile = File.createTempFile("capture-", ".jpg", directory)
+            val captureUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                captureFile
+            )
+            cameraCaptureFile = captureFile
+            cameraCaptureUri = captureUri
+            cameraLauncher.launch(captureUri)
+        }.onFailure { throwable ->
+            cameraCaptureFile?.delete()
+            cameraCaptureFile = null
+            cameraCaptureUri = null
+            Toast.makeText(context, throwable.localizedMessage ?: "Could not open camera", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun editCurrentAvatar() {
+        val sourceUrl = avatarUrl ?: return
+        isPreparingCrop = true
+        coroutineScope.launch {
+            val sourceFile = runCatching {
+                withContext(Dispatchers.IO) {
+                    val file = File.createTempFile("avatar-source-", ".img", context.cacheDir)
+                    try {
+                        URL(sourceUrl).openConnection().apply {
+                            connectTimeout = 15_000
+                            readTimeout = 30_000
+                        }.getInputStream().use { input -> file.outputStream().use(input::copyTo) }
+                        file
+                    } catch (throwable: Throwable) {
+                        file.delete()
+                        throw throwable
+                    }
+                }
+            }.getOrElse { throwable ->
+                Toast.makeText(context, throwable.localizedMessage ?: "Could not load profile picture", Toast.LENGTH_SHORT).show()
+                null
+            }
+            isPreparingCrop = false
+            sourceFile?.let { launchCrop(Uri.fromFile(it), it) }
+        }
     }
 
     var isEditing by rememberSaveable { mutableStateOf(false) }
@@ -1100,6 +1286,93 @@ fun ProfileScreen(
         )
     }
 
+    if (showAvatarPreview && !avatarUrl.isNullOrBlank()) {
+        Dialog(onDismissRequest = { showAvatarPreview = false }) {
+            Surface(color = c.surfaceElevated, shape = RoundedCornerShape(16.dp)) {
+                AsyncImage(
+                    model = avatarUrl,
+                    contentDescription = "Enlarged profile picture",
+                    modifier = Modifier
+                        .size(320.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { showAvatarPreview = false },
+                    contentScale = ContentScale.Crop
+                )
+            }
+        }
+    }
+
+    if (showAvatarOptions) {
+        AlertDialog(
+            onDismissRequest = { showAvatarOptions = false },
+            title = { Text("Profile picture", color = c.textPrimary) },
+            text = {
+                Column {
+                    TextButton(onClick = { showAvatarOptions = false; showImageSources = true }) {
+                        Text("Change", color = c.textPrimary)
+                    }
+                    if (!avatarUrl.isNullOrBlank()) {
+                        TextButton(
+                            enabled = !profileState.isSaving && !isPreparingCrop,
+                            onClick = { showAvatarOptions = false; editCurrentAvatar() }
+                        ) { Text("Edit/Crop", color = c.textPrimary) }
+                    }
+                    if (hasCustomAvatar) {
+                        TextButton(onClick = { showAvatarOptions = false; showRemoveAvatarConfirm = true }) {
+                            Text("Remove", color = c.error)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAvatarOptions = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
+    }
+
+    if (showImageSources) {
+        AlertDialog(
+            onDismissRequest = { showImageSources = false },
+            title = { Text("Change profile picture", color = c.textPrimary) },
+            text = {
+                Column {
+                    TextButton(
+                        enabled = !profileState.isSaving && !isPreparingCrop,
+                        onClick = { showImageSources = false; launchCamera() }
+                    ) { Text("Camera", color = c.textPrimary) }
+                    TextButton(
+                        enabled = !profileState.isSaving && !isPreparingCrop,
+                        onClick = {
+                            showImageSources = false
+                            imagePicker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        }
+                    ) { Text("Gallery", color = c.textPrimary) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showImageSources = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
+    }
+
+    if (showRemoveAvatarConfirm) {
+        AlertDialog(
+            onDismissRequest = { showRemoveAvatarConfirm = false },
+            title = { Text("Remove profile picture?", color = c.textPrimary) },
+            text = { Text("Your Google profile photo may be shown instead.", color = c.textSecondary) },
+            confirmButton = {
+                TextButton(
+                    enabled = !profileState.isSaving,
+                    onClick = { showRemoveAvatarConfirm = false; onRemoveAvatar() }
+                ) { Text("Remove", color = c.error) }
+            },
+            dismissButton = { TextButton(onClick = { showRemoveAvatarConfirm = false }) { Text("Cancel") } },
+            containerColor = c.surfaceElevated
+        )
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -1135,10 +1408,9 @@ fun ProfileScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     /* Avatar */
-                    val avatarUrl = profileState.avatarUrl ?: authState.avatarUrl
                     Box(
                         contentAlignment = Alignment.BottomEnd,
-                        modifier = Modifier.clickable(enabled = !profileState.isSaving) { imagePicker.launch("image/*") }
+                        modifier = Modifier.size(96.dp)
                     ) {
                         if (!avatarUrl.isNullOrBlank()) {
                             AsyncImage(
@@ -1146,27 +1418,31 @@ fun ProfileScreen(
                                 contentDescription = "Profile photo",
                                 modifier = Modifier
                                     .size(88.dp)
-                                    .clip(CircleShape),
+                                    .clip(CircleShape)
+                                    .clickable { showAvatarPreview = true },
                                 contentScale = ContentScale.Crop
                             )
                         } else {
-                            Surface(shape = CircleShape, color = c.accent.copy(alpha = 0.12f), modifier = Modifier.size(88.dp)) {
+                            Surface(
+                                shape = CircleShape,
+                                color = c.accent.copy(alpha = 0.12f),
+                                modifier = Modifier.size(88.dp).clickable { showAvatarOptions = true }
+                            ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(Icons.Default.Person, null, Modifier.size(44.dp), tint = c.accent)
                                 }
                             }
                         }
-                        
-                        // Edit overlay
-                        Surface(
-                            shape = CircleShape,
-                            color = c.accent,
-                            modifier = Modifier.size(28.dp).offset(x = 4.dp, y = 4.dp),
-                            shadowElevation = 4.dp
+
+                        IconButton(
+                            onClick = { showAvatarOptions = true },
+                            enabled = !profileState.isSaving && !isPreparingCrop,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .offset(x = 2.dp, y = 2.dp)
+                                .background(c.accent, CircleShape)
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Outlined.Edit, contentDescription = "Edit Profile Picture", Modifier.size(16.dp), tint = c.background)
-                            }
+                            Icon(Icons.Outlined.Edit, contentDescription = "Profile picture options", Modifier.size(16.dp), tint = c.background)
                         }
                     }
 
@@ -1778,10 +2054,15 @@ fun MiniPlayer(state: PlaybackState, viewModel: PlayerViewModel, onTap: () -> Un
 @Composable
 fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss: () -> Unit) {
     val c = MusedColors.current
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var showMenu by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var showLyricsEditor by remember { mutableStateOf(false) }
+    var isSavingLyrics by remember { mutableStateOf(false) }
 
     // Track cumulative horizontal drag to trigger skip
     var dragAccumulator by remember { mutableStateOf(0f) }
@@ -1809,8 +2090,9 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
             color = c.background
         ) {
             Column(
-                Modifier
+                modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -1899,6 +2181,45 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(song.artist, style = MaterialTheme.typography.bodyLarge, color = c.textSecondary)
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = c.surface,
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Lyrics",
+                                    color = c.textPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { showLyrics = true }) {
+                                    Text("View", color = c.accent)
+                                }
+                                TextButton(onClick = { showLyricsEditor = true }) {
+                                    Text(if (song.lyrics.isBlank()) "Add" else "Edit", color = c.accent)
+                                }
+                            }
+                            val activeLineIndex = activeLyricsLineIndex(song.lyrics, state.positionMs)
+                            val lyricPreview = activeLineIndex?.let { index ->
+                                parseLyrics(song.lyrics).getOrNull(index)?.text
+                            }?.takeIf(String::isNotBlank)
+                            Text(
+                                lyricPreview ?: if (song.lyrics.isBlank()) "Add lyrics for this song" else "Lyrics will appear here",
+                                color = if (lyricPreview == null) c.textSecondary else c.accent,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(24.dp))
@@ -1998,6 +2319,204 @@ fun FullScreenPlayer(state: PlaybackState, viewModel: PlayerViewModel, onDismiss
             onPlay = { viewModel.play(it) }
         )
     }
+    state.current?.let { currentSong ->
+        if (showLyrics) {
+            LyricsDialog(
+                song = currentSong,
+                positionMs = state.positionMs,
+                onDismiss = { showLyrics = false },
+                onEdit = {
+                    showLyrics = false
+                    showLyricsEditor = true
+                }
+            )
+        }
+        if (showLyricsEditor) {
+            LyricsEditorDialog(
+                song = currentSong,
+                positionMs = state.positionMs,
+                isSaving = isSavingLyrics,
+                onDismiss = { showLyricsEditor = false },
+                onSave = { lyrics ->
+                    isSavingLyrics = true
+                    coroutineScope.launch {
+                        try {
+                            viewModel.saveLyrics(currentSong, lyrics)
+                            showLyricsEditor = false
+                            showLyrics = true
+                        } catch (exception: Exception) {
+                            Toast.makeText(
+                                context,
+                                exception.localizedMessage ?: "Could not save lyrics",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } finally {
+                            isSavingLyrics = false
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+private data class ParsedLyricsLine(val text: String, val timestampMs: Long?)
+
+private fun parseLyrics(lyrics: String): List<ParsedLyricsLine> {
+    val timestampPattern = Regex("""\[(\d+):([0-5]\d)(?:[.:](\d{1,3}))?]""")
+    return lyrics.lineSequence().flatMap { line ->
+        val matches = timestampPattern.findAll(line).toList()
+        val text = timestampPattern.replace(line, "").trim()
+        if (matches.isEmpty()) {
+            sequenceOf(ParsedLyricsLine(line.trim(), null))
+        } else {
+            matches.asSequence().map { match ->
+                val minutes = match.groupValues[1].toLong()
+                val seconds = match.groupValues[2].toLong()
+                val fractionText = match.groupValues[3]
+                val millis = fractionText.padEnd(3, '0').take(3).toLongOrNull() ?: 0L
+                ParsedLyricsLine(text, (minutes * 60 + seconds) * 1000 + millis)
+            }
+        }
+    }.filter { it.text.isNotBlank() }.toList()
+}
+
+private fun activeLyricsLineIndex(lyrics: String, positionMs: Long): Int? {
+    val lines = parseLyrics(lyrics)
+    val activeTimedIndex = lines.indices
+        .filter { index -> lines[index].timestampMs?.let { it <= positionMs } == true }
+        .maxByOrNull { index -> lines[index].timestampMs ?: Long.MIN_VALUE }
+    return activeTimedIndex ?: lines.indexOfFirst { it.timestampMs == null }
+        .takeIf { it >= 0 }
+}
+
+@Composable
+private fun LyricsDialog(
+    song: Song,
+    positionMs: Long,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit
+) {
+    val c = MusedColors.current
+    val lines = remember(song.lyrics) { parseLyrics(song.lyrics) }
+    val activeIndex = activeLyricsLineIndex(song.lyrics, positionMs)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = c.surfaceElevated,
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .padding(20.dp)
+            ) {
+                Text(song.title, color = c.textPrimary, style = MaterialTheme.typography.titleLarge)
+                Text(song.artist, color = c.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(16.dp))
+                if (lines.isEmpty()) {
+                    Text("No lyrics yet. Add them manually.", color = c.textSecondary)
+                } else {
+                    Column(
+                        Modifier
+                            .weight(1f, fill = false)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        lines.forEachIndexed { index, line ->
+                            Text(
+                                line.text,
+                                color = if (index == activeIndex) c.accent else c.textPrimary,
+                                fontWeight = if (index == activeIndex) FontWeight.Bold else FontWeight.Normal,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Close", color = c.textSecondary) }
+                    TextButton(onClick = onEdit) { Text("Edit lyrics", color = c.accent) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsEditorDialog(
+    song: Song,
+    positionMs: Long,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    val c = MusedColors.current
+    var draft by rememberSaveable(song.id) { mutableStateOf(song.lyrics) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("Edit lyrics", color = c.textPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Add plain lyrics or timestamped lines in [mm:ss.xx] format.",
+                    color = c.textSecondary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 180.dp, max = 360.dp),
+                    enabled = !isSaving,
+                    placeholder = { Text("[00:12.50] First line") },
+                    textStyle = LocalTextStyle.current.copy(color = c.textPrimary),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = c.accent,
+                        unfocusedBorderColor = c.border,
+                        cursorColor = c.accent
+                    )
+                )
+                TextButton(
+                    enabled = !isSaving,
+                    onClick = {
+                        val timeMs = positionMs.coerceAtLeast(0)
+                        val minute = timeMs / 60_000
+                        val second = timeMs / 1_000 % 60
+                        val centisecond = timeMs % 1_000 / 10
+                        val timestamp = "[%02d:%02d.%02d] ".format(Locale.ROOT, minute, second, centisecond)
+                        draft = buildString {
+                            append(draft)
+                            if (isNotEmpty() && last() != '\n') append('\n')
+                            append(timestamp)
+                        }
+                    }
+                ) {
+                    Text("Insert current timestamp", color = c.accent)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !isSaving, onClick = { onSave(draft) }) {
+                Text(if (isSaving) "Saving..." else "Save", color = c.accent)
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !isSaving, onClick = onDismiss) {
+                Text("Cancel", color = c.textSecondary)
+            }
+        },
+        containerColor = c.surfaceElevated,
+        shape = RoundedCornerShape(24.dp)
+    )
 }
 
 
@@ -2121,7 +2640,7 @@ fun QueueDialog(state: PlaybackState, onDismiss: () -> Unit, onPlay: (Song) -> U
                             }
                         }
                     }
-                }
+            }
             }
         }
     }
