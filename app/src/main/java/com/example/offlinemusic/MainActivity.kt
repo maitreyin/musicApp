@@ -1152,7 +1152,7 @@ fun ProfileScreen(
             Toast.makeText(context, exception.localizedMessage ?: "Could not open image cropper", Toast.LENGTH_SHORT).show()
         }
     }
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             isPreparingCrop = true
             coroutineScope.launch {
@@ -1309,7 +1309,7 @@ fun ProfileScreen(
             text = {
                 Column {
                     TextButton(onClick = { showAvatarOptions = false; showImageSources = true }) {
-                        Text("Change", color = c.textPrimary)
+                        Text("Replace", color = c.textPrimary)
                     }
                     if (!avatarUrl.isNullOrBlank()) {
                         TextButton(
@@ -1343,11 +1343,7 @@ fun ProfileScreen(
                         enabled = !profileState.isSaving && !isPreparingCrop,
                         onClick = {
                             showImageSources = false
-                            imagePicker.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
+                            imagePicker.launch("image/*")
                         }
                     ) { Text("Gallery", color = c.textPrimary) }
                 }
