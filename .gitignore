@@ -6,7 +6,12 @@ local.properties
 dbDetails.txt
 # Local MCP configuration
 .vscode/mcp.json
+# Android release signing
+*.jks
+*.keystore
 
+# Signing credentials
+keystore.properties
 
 
 
