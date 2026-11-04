@@ -4,8 +4,11 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import com.example.offlinemusic.auth.AuthUiState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.NewPipe
 import java.io.File
@@ -28,6 +32,69 @@ data class SongMetadata(
     val durationMs: Long? = null,
     val artworkUrl: String? = null
 )
+
+data class PendingDownloadedSong internal constructor(
+    val userId: String,
+    val stagedAudioPath: String,
+    val metadata: SongMetadata
+)
+
+class DownloadCancellation {
+    @Volatile
+    private var cancelled = false
+    private var connection: HttpURLConnection? = null
+    private var input: java.io.InputStream? = null
+
+    val isCancelled: Boolean get() = cancelled
+
+    fun cancel() {
+        val activeInput: java.io.InputStream?
+        val activeConnection: HttpURLConnection?
+        synchronized(this) {
+            cancelled = true
+            activeInput = input
+            activeConnection = connection
+        }
+        activeConnection?.disconnect()
+        try {
+            activeInput?.close()
+        } catch (e: java.io.IOException) {
+            android.util.Log.w("SongRepository", "Could not close cancelled download stream", e)
+        }
+    }
+
+    @Synchronized
+    internal fun attach(connection: HttpURLConnection) {
+        if (cancelled) {
+            connection.disconnect()
+            throw CancellationException("Download cancelled")
+        }
+        this.connection = connection
+    }
+
+    @Synchronized
+    internal fun attach(input: java.io.InputStream) {
+        if (cancelled) {
+            input.close()
+            throw CancellationException("Download cancelled")
+        }
+        this.input = input
+    }
+
+    @Synchronized
+    internal fun detach(input: java.io.InputStream) {
+        if (this.input === input) this.input = null
+    }
+
+    @Synchronized
+    internal fun detach(connection: HttpURLConnection) {
+        if (this.connection === connection) this.connection = null
+    }
+
+    fun throwIfCancelled() {
+        if (cancelled) throw CancellationException("Download cancelled")
+    }
+}
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SongRepository(
@@ -159,36 +226,125 @@ class SongRepository(
         }
     }
 
-    /** Downloads a direct audio URL or resolves a YouTube URL into an audio stream. */
-    suspend fun download(url: String): Song = withContext(Dispatchers.IO) {
+    /** Downloads into a private staging file; the song is not added to the library until confirmed. */
+    suspend fun download(url: String, cancellation: DownloadCancellation): PendingDownloadedSong =
+        withContext(Dispatchers.IO) {
         val userId = requireCurrentUserId()
+        var stagedFile: File? = null
         try {
+            cancellation.throwIfCancelled()
             val source = if (isYouTubeUrl(url)) {
                 try {
-                    resolveYouTube(url)
+                    runInterruptible { resolveYouTube(url) }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     android.util.Log.e("SongRepository", "Failed to resolve YouTube URL: $url", e)
                     throw Exception("Failed to resolve YouTube URL: ${e.message ?: e.javaClass.simpleName}", e)
                 }
             } else {
                 DownloadSource(url)
             }
-            val input = openConnection(source.audioUrl).inputStream
+            currentCoroutineContext().ensureActive()
+            cancellation.throwIfCancelled()
+
+            val stagingDirectory = File(context.cacheDir, "pending-downloads").apply { mkdirs() }
+            val output = File.createTempFile("download-", ".part", stagingDirectory)
+            stagedFile = output
+            val connection = openConnection(source.audioUrl)
+            cancellation.attach(connection)
             try {
-                importStream(input, userId, source.metadata)
+                val input = connection.inputStream
+                cancellation.attach(input)
+                try {
+                    input.use { stream ->
+                        output.outputStream().use { destination ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                currentCoroutineContext().ensureActive()
+                                cancellation.throwIfCancelled()
+                                val count = stream.read(buffer)
+                                if (count < 0) break
+                                destination.write(buffer, 0, count)
+                            }
+                        }
+                    }
+                } finally {
+                    cancellation.detach(input)
+                }
             } finally {
-                input.close()
+                cancellation.detach(connection)
+                connection.disconnect()
             }
+            currentCoroutineContext().ensureActive()
+            cancellation.throwIfCancelled()
+
+            val extracted = extractMetadata(output)
+            val metadata = source.metadata ?: extracted
+            val initialMetadata = SongMetadata(
+                title = metadata.title.takeIf(String::isNotBlank) ?: extracted.title,
+                artist = metadata.artist.takeIf(String::isNotBlank) ?: extracted.artist,
+                album = metadata.album.takeIf(String::isNotBlank) ?: extracted.album,
+                genre = metadata.genre.takeIf(String::isNotBlank) ?: extracted.genre,
+                durationMs = metadata.durationMs ?: extracted.durationMs,
+                artworkUrl = metadata.artworkUrl
+            )
+            PendingDownloadedSong(userId, output.absolutePath, initialMetadata)
+        } catch (e: CancellationException) {
+            stagedFile?.let(::deleteStagedFile)
+            throw e
         } catch (e: Exception) {
+            stagedFile?.let(::deleteStagedFile)
+            currentCoroutineContext().ensureActive()
+            cancellation.throwIfCancelled()
             android.util.Log.e("SongRepository", "Download failed for URL: $url", e)
             throw e
+        }
+    }
+
+    suspend fun saveDownloaded(pending: PendingDownloadedSong, metadata: SongMetadata): Song =
+        withContext(Dispatchers.IO) {
+            val userId = requireCurrentUserId()
+            check(pending.userId == userId) { "Cannot download a song into another account's library" }
+            val stagedFile = File(pending.stagedAudioPath)
+            check(stagedFile.isFile) { "The staged download is no longer available" }
+            val song = stagedFile.inputStream().use { input ->
+                importStream(input, userId, metadata, metadataOverridesEmbedded = true)
+            }
+            deleteStagedFile(stagedFile)
+            song
+        }
+
+    suspend fun discardDownloaded(pending: PendingDownloadedSong) = withContext(Dispatchers.IO) {
+        deleteStagedFile(File(pending.stagedAudioPath))
+    }
+
+    private fun deleteStagedFile(file: File) {
+        if (file.exists() && !file.delete()) {
+            android.util.Log.w("SongRepository", "Could not remove staged download: ${file.absolutePath}")
+        }
+    }
+
+    private suspend fun extractMetadata(file: File): SongMetadata = withContext(Dispatchers.IO) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            SongMetadata(
+                title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" },
+                artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" },
+                album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
+                genre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE).orEmpty().ifBlank { "Unknown genre" },
+                durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            )
+        } finally {
+            retriever.release()
         }
     }
 
     private suspend fun importStream(
         input: java.io.InputStream,
         userId: String,
-        metadata: SongMetadata? = null
+        metadata: SongMetadata? = null,
+        metadataOverridesEmbedded: Boolean = false
     ): Song {
         val audioDir = File(context.filesDir, "audio").apply { mkdirs() }
         val id = UUID.randomUUID().toString()
@@ -229,10 +385,10 @@ class SongRepository(
             Song(
                 id = id,
                 userId = userId,
-                title = metadata?.title?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" },
-                artist = metadata?.artist?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" },
-                album = metadata?.album?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
-                genre = metadata?.genre?.takeIf { it.isNotBlank() } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE).orEmpty().ifBlank { "Unknown genre" },
+                title = metadata?.title?.let { if (metadataOverridesEmbedded) it else it.takeIf(String::isNotBlank) } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().ifBlank { "Unknown title" },
+                artist = metadata?.artist?.let { if (metadataOverridesEmbedded) it else it.takeIf(String::isNotBlank) } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().ifBlank { "Unknown artist" },
+                album = metadata?.album?.let { if (metadataOverridesEmbedded) it else it.takeIf(String::isNotBlank) } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM).orEmpty().ifBlank { "Unknown album" },
+                genre = metadata?.genre?.let { if (metadataOverridesEmbedded) it else it.takeIf(String::isNotBlank) } ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE).orEmpty().ifBlank { "Unknown genre" },
                 durationMs = metadata?.durationMs ?: meta.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L,
                 localPath = output.absolutePath,
                 artworkPath = artwork
@@ -378,7 +534,9 @@ class SongRepository(
     suspend fun update(song: Song) = withContext(Dispatchers.IO) {
         val userId = requireCurrentUserId()
         check(song.userId == userId) { "Cannot update a song owned by another account" }
-        dao.upsert(song)
+        check(
+            dao.updateMetadata(userId, song.id, song.title, song.artist, song.album, song.genre) == 1
+        ) { "Song is no longer available in this account" }
     }
 
     suspend fun updateLyrics(song: Song, lyrics: String) = withContext(Dispatchers.IO) {

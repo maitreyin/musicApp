@@ -60,14 +60,19 @@ import androidx.lifecycle.lifecycleScope
 import coil.compose.AsyncImage
 import com.example.offlinemusic.auth.AuthUiState
 import com.example.offlinemusic.auth.ProfileUiState
+import com.example.offlinemusic.data.DownloadCancellation
+import com.example.offlinemusic.data.PendingDownloadedSong
 import com.example.offlinemusic.data.Playlist
 import com.example.offlinemusic.data.Song
 import com.example.offlinemusic.player.PlaybackState
 import com.example.offlinemusic.player.PlayerViewModel
 import com.example.offlinemusic.player.RepeatMode
 import com.example.offlinemusic.ui.theme.*
+import com.example.offlinemusic.ui.DownloadMetadataDialog
 import com.yalantis.ucrop.UCrop
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -113,19 +118,7 @@ class MainActivity : ComponentActivity() {
                         themeManager.select(key)
                         themeKey = key
                     }
-                ) { url, onStart, onSuccess, onError ->
-                    lifecycleScope.launch {
-                        onStart()
-                        runCatching {
-                            (application as MusicApplication).repository.download(url)
-                        }.onSuccess { song ->
-                            onSuccess("Successfully downloaded: ${song.title}")
-                        }.onFailure { e ->
-                            onError(e.message ?: "Unknown error occurred during download")
-                            android.util.Log.e("MainActivity", "Download failed for URL: $url", e)
-                        }
-                    }
-                }
+                )
             }
         }
     }
@@ -191,21 +184,21 @@ fun MusicApp(
     authManager: com.example.offlinemusic.auth.SupabaseAuthManager,
     onImport: () -> Unit,
     themeKey: String,
-    onThemeChange: (String) -> Unit,
-    onDownload: (String, onStart: () -> Unit, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit
+    onThemeChange: (String) -> Unit
 ) {
     val c = MusedColors.current
     val songs by viewModel.songs.collectAsStateWithLifecycle()
     val favoriteSongs by viewModel.favoriteSongs.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
-    val recentlyPlayed by viewModel.recentlyPlayed.collectAsStateWithLifecycle()
     val selectedPlaylistId by viewModel.selectedPlaylistId.collectAsStateWithLifecycle()
     val selectedPlaylistSongs by viewModel.selectedPlaylistSongs.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
     val authState by authManager.authState.collectAsStateWithLifecycle()
     val profileState by authManager.profileState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val repository = remember(context) { (context.applicationContext as MusicApplication).repository }
+    val coroutineScope = rememberCoroutineScope()
     val lifecycleScope = (context as? ComponentActivity)?.lifecycleScope
     val startupScreen = if (authState.signedIn) Screen.HOME else Screen.AUTH
 
@@ -240,6 +233,10 @@ fun MusicApp(
     var isDownloading by rememberSaveable { mutableStateOf(false) }
     var downloadError by rememberSaveable { mutableStateOf<String?>(null) }
     var downloadSuccess by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingDownload by remember { mutableStateOf<PendingDownloadedSong?>(null) }
+    var isSavingDownload by remember { mutableStateOf(false) }
+    var downloadCancellation by remember { mutableStateOf<DownloadCancellation?>(null) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var songToAddToPlaylist by remember { mutableStateOf<Song?>(null) }
@@ -262,11 +259,32 @@ fun MusicApp(
     }
 
     val handleDownload: (String) -> Unit = { url ->
-        onDownload(url,
-            { isDownloading = true; downloadError = null; downloadSuccess = null },
-            { message -> isDownloading = false; downloadSuccess = message; showDownload = false },
-            { error -> isDownloading = false; downloadError = error }
-        )
+        val cancellation = DownloadCancellation()
+        downloadCancellation = cancellation
+        isDownloading = true
+        downloadError = null
+        downloadSuccess = null
+        val job = coroutineScope.launch {
+            try {
+                pendingDownload = repository.download(url, cancellation)
+                showDownload = false
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                downloadError = e.message ?: "Unknown error occurred during download"
+                android.util.Log.e("MusicApp", "Download failed for URL: $url", e)
+            } finally {
+                if (downloadCancellation === cancellation) {
+                    downloadCancellation = null
+                    downloadJob = null
+                    isDownloading = false
+                }
+            }
+        }
+        downloadJob = job
+        job.invokeOnCompletion { cause ->
+            if (cause is CancellationException) cancellation.cancel()
+        }
     }
 
     /* ─── Dialogs ─── */
@@ -318,12 +336,21 @@ fun MusicApp(
                     Text("Please wait while we download your audio", color = c.textSecondary)
                 }
             },
-            confirmButton = { },
+            confirmButton = {
+                TextButton(onClick = {
+                    downloadCancellation?.cancel()
+                    downloadJob?.cancel()
+                    downloadCancellation = null
+                    downloadJob = null
+                    isDownloading = false
+                    showDownload = false
+                }) { Text("Cancel", color = c.textSecondary) }
+            },
             containerColor = c.surfaceElevated,
             shape = RoundedCornerShape(24.dp)
         )
     }
-    downloadError?.let { error ->
+    downloadError?.takeIf { pendingDownload == null }?.let { error ->
         AlertDialog(
             onDismissRequest = { downloadError = null },
             title = { Text("Download Failed", color = c.textPrimary) },
@@ -331,6 +358,35 @@ fun MusicApp(
             confirmButton = { TextButton(onClick = { downloadError = null }) { Text("OK", color = c.accent) } },
             containerColor = c.surfaceElevated,
             shape = RoundedCornerShape(24.dp)
+        )
+    }
+    pendingDownload?.let { pending ->
+        DownloadMetadataDialog(
+            metadata = pending.metadata,
+            isSaving = isSavingDownload,
+            errorMessage = downloadError,
+            onCancel = {
+                pendingDownload = null
+                downloadError = null
+                coroutineScope.launch { repository.discardDownloaded(pending) }
+            },
+            onSave = { metadata ->
+                coroutineScope.launch {
+                    isSavingDownload = true
+                    downloadError = null
+                    try {
+                        val song = repository.saveDownloaded(pending, metadata)
+                        pendingDownload = null
+                        downloadSuccess = "Successfully downloaded: ${song.title}"
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        downloadError = e.message ?: "Unable to save downloaded song"
+                        android.util.Log.e("MusicApp", "Failed to save downloaded song", e)
+                    } finally {
+                        isSavingDownload = false
+                    }
+                }
+            }
         )
     }
     downloadSuccess?.let { success ->
@@ -406,7 +462,7 @@ fun MusicApp(
                     }
                 )
                 Screen.HOME -> HomeScreen(
-                    songs, filtered, viewModel, recentlyPlayed, favoriteIds, onImport,
+                    songs, filtered, viewModel, favoriteIds, onImport,
                     { showDownload = true }, { showSearch = true }, { songToAddToPlaylist = it }, isDownloading
                 )
                 Screen.LIBRARY -> LibraryScreen(
@@ -585,7 +641,6 @@ fun HomeScreen(
     songs: List<Song>,
     filtered: List<Song>,
     viewModel: PlayerViewModel,
-    recentlyPlayed: List<Song>,
     favoriteIds: Set<String>,
     onImport: () -> Unit,
     onDownload: () -> Unit,
@@ -635,50 +690,14 @@ fun HomeScreen(
         if (songs.isEmpty()) {
             EmptyLibrary(onImport, onDownload, !isLoading)
         } else {
-            if (recentlyPlayed.isNotEmpty()) {
-                Text(
-                    "Recently Played",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = c.textPrimary,
-                    modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp)
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(recentlyPlayed, key = { "played-${it.id}" }) { song ->
-                        RecentSongCard(song = song, onPlay = { viewModel.play(song) })
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-            /* Recently added section */
-            if (songs.size > 3) {
-                Text(
-                    "Recently Added",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = c.textPrimary,
-                    modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp)
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    val recent = songs.sortedByDescending { it.addedAt }.take(6)
-                    items(recent, key = { it.id }) { song ->
-                        RecentSongCard(song = song, onPlay = { viewModel.play(song) })
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-
             Text(
                 "All Songs",
                 style = MaterialTheme.typography.titleMedium,
                 color = c.textPrimary,
-                modifier = Modifier.padding(start = 20.dp, bottom = 4.dp)
+                modifier = Modifier.padding(start = 20.dp, top = 16.dp, bottom = 4.dp)
             )
             LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -694,40 +713,6 @@ fun HomeScreen(
                         onAddToPlaylist = onAddToPlaylist
                     )
                 }
-            }
-        }
-    }
-}
-
-/** Horizontal card for the "Recently Added" row on Home. */
-@Composable
-fun RecentSongCard(song: Song, onPlay: () -> Unit) {
-    val c = MusedColors.current
-    Surface(
-        modifier = Modifier
-            .width(140.dp)
-            .clickable(onClick = onPlay),
-        color = c.card,
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column {
-            Artwork(song, Modifier.fillMaxWidth().height(130.dp))
-            Column(Modifier.padding(10.dp)) {
-                Text(
-                    song.title,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = c.textPrimary
-                )
-                Text(
-                    song.artist,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = c.textSecondary
-                )
             }
         }
     }
